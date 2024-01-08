@@ -5,6 +5,7 @@ module BinOp
   
   use MultiTypeSymbolTable;
   use MultiTypeSymEntry;
+  use ServerErrorStrings;
   use Logging;
   use Message;
   use BitOps;
@@ -48,6 +49,214 @@ module BinOp
       res += divisor;
     }
     return res;
+  }
+
+  enum opCategory {
+    bitwiseLogic,
+    bitwiseShift,
+    bitwiseRot,
+    comparison,
+    basicArithmetic,
+    fancyArithmetic
+  }
+
+  const bitwiseLogicOps: domain(string) = {"|", "&", "^"},
+        bitwiseShiftOps: domain(string) = {"<<", ">>"},
+        bitwiseRotOps: domain(string) = {"<<<", ">>>"},
+        comparisonOps: domain(string) = {"==", "!=", "<", ">", "<=", ">="},
+        basicArithmetic: domain(string) = {"+", "-", "*"},
+        fancyArithmetic: domain(string) = {"/", "//", "%", "**"};
+
+  // get the op-category
+  // assumes the op is valid
+  private proc getOpCategory(op: string): opCategory {
+    if bitwiseLogicOps.contains(op) then return opCategory.bitwiseLogic;
+    if bitwiseShiftOps.contains(op) then return opCategory.bitwiseShift;
+    if bitwiseRotOps.contains(op) then return opCategory.bitwiseRot;
+    if comparisonOps.contains(op) then return opCategory.comparison;
+    if arithmeticOps.contains(op) then return opCategory.arithmetic;
+    else return opCategory.fancyArithmetic;
+  }
+
+  proc isValidOperator(op: string): bool {
+    return bitwiseLogicOps.contains(op) || bitwiseShiftOps.contains(op) ||
+           bitwiseRotOps.contains(op) || comparisonOps.contains(op) ||
+           basicArithmetic.contains(op) || fancyArithmetic.contains(op);
+  }
+
+  proc doBinOpvv(const ref l: [] ?lt, const ref r: [] ?rt, ref e: [] ?et op: string): bool throws {
+    select getOpCategory(op) {
+      when opCategory.bitwiseLogic {
+        if (isIntegralType(lt) || lt == bool ) && (isIntegralType(rt) || rt == bool) {
+          select op {
+            when "|" do e = l | r;
+            when "&" do e = l & r;
+            when "^" do e = l ^ r;
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+      when opCategory.bitwiseShift {
+        if isIntegralType(lt) && isIntegralType(rt) {
+          select op {
+            when "<<" do lBitShift(e, l:et, r:et);
+            when ">>" do rBitShift(e, l:et, r:et);
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if lt == bool && isIntegralType(rt) {
+          select op {
+            when "<<" do lBitShift(e, l:int(8), r);
+            when ">>" do rBitShift(e, l:int(8), r);
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if isIntegralType(lt) && rt == bool {
+          select op {
+            when "<<" do lBitShift(e, l, r:int(8));
+            when ">>" do rBitShift(e, l, r:int(8));
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if lt == bool && rt == bool {
+          select op {
+            when "<<" do lBitShift(e, l:int(8), r:int(8));
+            when ">>" do rBitShift(e, l:int(8), r:int(8));
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+      when opCategory.bitwiseRot {
+        if isIntegralType(lt) && isIntegralType(rt) {
+          select op {
+            when "<<<" do e = rotl(l, r);
+            when ">>>" do e = rotr(l, r);
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+      when opCategory.comparison {
+        if ((isIntegralType(lt) || lt == bool) && (isIntegralType(rt) || rt == bool)) ||
+           (isRealType(lt) && isRealType(rt))
+        {
+          select op {
+            when "==" do e = l == r;
+            when "!=" do e = l != r;
+            when "<" do e = l < r;
+            when ">" do e = l > r;
+            when "<=" do e = l <= r;
+            when ">=" do e = l >= r;
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if (isIntegralType(lt) || lt == bool) && isRealType(rt) {
+          select op {
+            when "==" do e = l:rt == r;
+            when "!=" do e = l:rt != r;
+            when "<" do e = l:rt < r;
+            when ">" do e = l:rt > r;
+            when "<=" do e = l:rt <= r;
+            when ">=" do e = l:rt >= r;
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if isRealType(lt) && (isIntegralType(rt) || rt == bool) {
+          select op {
+            when "==" do e = l == r:lt;
+            when "!=" do e = l != r:lt;
+            when "<" do e = l < r:lt;
+            when ">" do e = l > r:lt;
+            when "<=" do e = l <= r:lt;
+            when ">=" do e = l >= r:lt;
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if (SupportsComplex64 || SupportsComplex128) && (
+            (isComplexType(lt) && (isIntegralType(rt) || rt == bool || isRealType(rt))) ||
+            ((isIntegralType(lt) || lt == bool || isRealType(lt)) && isComplexType(rt))
+          ) {
+          // following numpy's implementation of complex comparisons, only consider the real part
+          select op {
+            when "==" do e = l:real == r:real;
+            when "!=" do e = l:real != r:real;
+            when "<" do e = l:real < r:real;
+            when ">" do e = l:real > r:real;
+            when "<=" do e = l:real <= r:real;
+            when ">=" do e = l:real >= r:real;
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+      when opCategory.basicArithmetic {
+        select op {
+          when "+" do e = lCast:et + rCast:et;
+          when "-" do e = lCast:et - rCast:et;
+          when "*" do e = lCast:et * rCast:et;
+          otherwise halt("unreachable");
+          return true;
+        }
+      }
+      when opCategory.fancyArithmetic {
+        const lCast = if lt == bool then l:int(8) else l,
+              rCast = if rt == bool then r:int(8) else r;
+
+        if (isSignedIntegerType(lCast.eltType) && isSignedIntegerType(rCast.eltType)) ||
+           (isUnsignedIntegerType(lCast.eltType) && isUnsignedIntegerType(rCast.eltType))
+        {
+          select op {
+            when "/" do e = lCast:real / rCast:real;
+            when "//" do
+              e = [(li, ri) in zip(lCast, rCast)] if ri != 0 then li/ri else 0;
+            when "%" do
+              e = [(li, ri) in zip(lCast, rCast)] if ri != 0 then li%ri else 0;
+            when "**" {
+              if || reduce (r < 0) {
+                // use a real computation if working with negative exponents
+                e = (lCast:real**rCast:real):et;
+              } else {
+                e = lCast**rCast;
+              }
+            };
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if (isSignedIntegerType(lCast.eltType) && isUnsignedIntegerType(rCast.eltType)) ||
+                  (isUnsignedIntegerType(lCast.eltType) && isSignedIntegerType(rCast.eltType))
+        {
+          select op {
+            when "/" do e = lCast:real / rCast:real;
+            when "//" do
+              e = [(li, ri) in zip(lCast, rCast)] floorDivisionHelper(li, ri):et;
+            when "%" do
+              e = [(li, ri) in zip(lCast, rCast)] modHelper(li, ri):et;
+            when "**" do return false;
+            otherwise halt("unreachable");
+          }
+        } else if 
+      }
+      otherwise halt("unreachable");
+    }
+    otherwise halt("unreachable");
+  }
+
+  private proc lBitShift(ref e, const ref l, const ref r) {
+    [(ei, li, ri,) in zip(l, r, e)] ei = if ri < 64 && ri >= 0 then li << ri else 0;
+  }
+
+  private proc rBitShift(ref e, const ref l, const ref r) {
+    [(ei, li, ri,) in zip(l, r, e)] ei = if ri < 64 && ri >= 0 then li >> ri else 0;
   }
 
   /*

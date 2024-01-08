@@ -7,8 +7,10 @@ module OperatorMsg
     use BitOps;
     use Reflection;
     use ServerErrors;
+    use ServerConfig;
     use BinOp;
     use BigInteger;
+    use NumPyDType;
 
     use MultiTypeSymbolTable;
     use MultiTypeSymEntry;
@@ -23,6 +25,246 @@ module OperatorMsg
     private config const logLevel = ServerConfig.logLevel;
     private config const logChannel = ServerConfig.logChannel;
     const omLogger = new Logger(logLevel, logChannel);
+
+
+    @arkouda.registerND
+    proc binopvvMsg(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab, param nd: int): MsgTuple throws {
+      param pn = Reflection.getRoutineName();
+      const op = msgArgs.getValueOf("op"),
+            aname = msgArgs.getValueOf("a"),
+            bname = msgArgs.getValueOf("b");
+
+      if !isValidOperator(op) {
+        const errorMsg = "'%s' is not a valid binary operator".doFormat(op);
+        omLogger.error(getModuleName(), pn, getLineNumber(),errorMsg);
+        return new MsgTuple(errorMsg, MsgType.ERROR);
+      }
+
+      const rname = st.nextName();
+      var left: borrowed GenSymEntry = getGenericTypedArrayEntry(aname, st),
+          right: borrowed GenSymEntry = getGenericTypedArrayEntry(bname, st);
+
+      omLogger.debug(getModuleName(), pn, getLineNumber(),
+                     "cmd: %? op: %? left pdarray: %? right pdarray: %?".doFormat(
+                      cmd,op,st.attrib(aname),st.attrib(bname)));
+
+      proc doBinop(type lt, type rt): MsgTuple throws
+        where isSupportedType(lt) && isSupportedType(rt)
+      {
+        type resultType = if op == "/"
+             then divType(lt, rt)
+             else if comparisonOps.contains(op)
+                then bool
+                else commonType(lt, rt);
+
+        if !isSupportedType(resultType) {
+          const errorMsg = unsupportedTypeError(resultType, pn);
+          omLogger.error(getModuleName(), pn, getLineNumber(),errorMsg);
+          return new MsgTuple(errorMsg, MsgType.ERROR);
+        }
+
+        var e = st.addEntry(rname, l.tupShape, resultType);
+        const l = toSymEntry(left, lt, nd),
+              r = toSymEntry(right, rt, nd);
+
+        const success = doBinOpvv(l, r, e, op);
+
+        if success {
+          const repMsg = "created %s".doFormat(st.attrib(rname));
+          omLogger.debug(getModuleName(),pn,getLineNumber(),repMsg);
+          return new MsgTuple(repMsg, MsgType.NORMAL);
+        } else {
+          const errMsg = notImplementedError(pn,lt:string,op,rt:string);
+          omLogger.error(getModuleName(),pn,getLineNumber(),errMsg);
+          return new MsgTuple(errMsg, MsgType.ERROR);
+        }
+      }
+
+      proc doBinop(type lt, type rt): MsgTuple throws
+        where !isSupportedType(lt) || !isSupportedType(rt)
+      {
+        const errorMsg = unsupportedTypeError(if !isSupportedType(lt) then lt else rt, pn);
+        omLogger.error(getModuleName(), pn, getLineNumber(),errorMsg);
+        return new MsgTuple(errorMsg, MsgType.ERROR);
+      }
+
+      select (left.dtype, right.dtype) {
+        when (DType.Bool, DType.Bool) do doBinop(bool, bool);
+        when (DType.Bool, DType.Int8) do doBinop(bool, int(8));
+        when (DType.Bool, DType.Int16) do doBinop(bool, int(16));
+        when (DType.Bool, DType.Int32) do doBinop(bool, int(32));
+        when (DType.Bool, DType.Int64) do doBinop(bool, int(64));
+        when (DType.Bool, DType.UInt8) do doBinop(bool, uint(8));
+        when (DType.Bool, DType.UInt16) do doBinop(bool, uint(16));
+        when (DType.Bool, DType.UInt32) do doBinop(bool, uint(32));
+        when (DType.Bool, DType.UInt64) do doBinop(bool, uint(64));
+        when (DType.Bool, DType.Float32) do doBinop(bool, real(32));
+        when (DType.Bool, DType.Float64) do doBinop(bool, real(64));
+        when (DType.Bool, DType.Complex64) do doBinop(bool, complex(64));
+        when (DType.Bool, DType.Complex128) do doBinop(bool, complex(128));
+        when (DType.Int8, DType.Bool) do doBinop(int(8), bool);
+        when (DType.Int8, DType.Int8) do doBinop(int(8), int(8));
+        when (DType.Int8, DType.Int16) do doBinop(int(8), int(16));
+        when (DType.Int8, DType.Int32) do doBinop(int(8), int(32));
+        when (DType.Int8, DType.Int64) do doBinop(int(8), int(64));
+        when (DType.Int8, DType.UInt8) do doBinop(int(8), uint(8));
+        when (DType.Int8, DType.UInt16) do doBinop(int(8), uint(16));
+        when (DType.Int8, DType.UInt32) do doBinop(int(8), uint(32));
+        when (DType.Int8, DType.UInt64) do doBinop(int(8), uint(64));
+        when (DType.Int8, DType.Float32) do doBinop(int(8), real(32));
+        when (DType.Int8, DType.Float64) do doBinop(int(8), real(64));
+        when (DType.Int8, DType.Complex64) do doBinop(int(8), complex(64));
+        when (DType.Int8, DType.Complex128) do doBinop(int(8), complex(128));
+        when (DType.Int16, DType.Bool) do doBinop(int(16), bool);
+        when (DType.Int16, DType.Int8) do doBinop(int(16), int(8));
+        when (DType.Int16, DType.Int16) do doBinop(int(16), int(16));
+        when (DType.Int16, DType.Int32) do doBinop(int(16), int(32));
+        when (DType.Int16, DType.Int64) do doBinop(int(16), int(64));
+        when (DType.Int16, DType.UInt8) do doBinop(int(16), uint(8));
+        when (DType.Int16, DType.UInt16) do doBinop(int(16), uint(16));
+        when (DType.Int16, DType.UInt32) do doBinop(int(16), uint(32));
+        when (DType.Int16, DType.UInt64) do doBinop(int(16), uint(64));
+        when (DType.Int16, DType.Float32) do doBinop(int(16), real(32));
+        when (DType.Int16, DType.Float64) do doBinop(int(16), real(64));
+        when (DType.Int16, DType.Complex64) do doBinop(int(16), complex(64));
+        when (DType.Int16, DType.Complex128) do doBinop(int(16), complex(128));
+        when (DType.Int32, DType.Bool) do doBinop(int(32), bool);
+        when (DType.Int32, DType.Int8) do doBinop(int(32), int(8));
+        when (DType.Int32, DType.Int16) do doBinop(int(32), int(16));
+        when (DType.Int32, DType.Int32) do doBinop(int(32), int(32));
+        when (DType.Int32, DType.Int64) do doBinop(int(32), int(64));
+        when (DType.Int32, DType.UInt8) do doBinop(int(32), uint(8));
+        when (DType.Int32, DType.UInt16) do doBinop(int(32), uint(16));
+        when (DType.Int32, DType.UInt32) do doBinop(int(32), uint(32));
+        when (DType.Int32, DType.UInt64) do doBinop(int(32), uint(64));
+        when (DType.Int32, DType.Float32) do doBinop(int(32), real(32));
+        when (DType.Int32, DType.Float64) do doBinop(int(32), real(64));
+        when (DType.Int32, DType.Complex64) do doBinop(int(32), complex(64));
+        when (DType.Int32, DType.Complex128) do doBinop(int(32), complex(128));
+        when (DType.Int64, DType.Bool) do doBinop(int(64), bool);
+        when (DType.Int64, DType.Int8) do doBinop(int(64), int(8));
+        when (DType.Int64, DType.Int16) do doBinop(int(64), int(16));
+        when (DType.Int64, DType.Int32) do doBinop(int(64), int(32));
+        when (DType.Int64, DType.Int64) do doBinop(int(64), int(64));
+        when (DType.Int64, DType.UInt8) do doBinop(int(64), uint(8));
+        when (DType.Int64, DType.UInt16) do doBinop(int(64), uint(16));
+        when (DType.Int64, DType.UInt32) do doBinop(int(64), uint(32));
+        when (DType.Int64, DType.UInt64) do doBinop(int(64), uint(64));
+        when (DType.Int64, DType.Float32) do doBinop(int(64), real(32));
+        when (DType.Int64, DType.Float64) do doBinop(int(64), real(64));
+        when (DType.Int64, DType.Complex64) do doBinop(int(64), complex(64));
+        when (DType.Int64, DType.Complex128) do doBinop(int(64), complex(128));
+        when (DType.UInt8, DType.Bool) do doBinop(uint(8), bool);
+        when (DType.UInt8, DType.Int8) do doBinop(uint(8), int(8));
+        when (DType.UInt8, DType.Int16) do doBinop(uint(8), int(16));
+        when (DType.UInt8, DType.Int32) do doBinop(uint(8), int(32));
+        when (DType.UInt8, DType.Int64) do doBinop(uint(8), int(64));
+        when (DType.UInt8, DType.UInt8) do doBinop(uint(8), uint(8));
+        when (DType.UInt8, DType.UInt16) do doBinop(uint(8), uint(16));
+        when (DType.UInt8, DType.UInt32) do doBinop(uint(8), uint(32));
+        when (DType.UInt8, DType.UInt64) do doBinop(uint(8), uint(64));
+        when (DType.UInt8, DType.Float32) do doBinop(uint(8), real(32));
+        when (DType.UInt8, DType.Float64) do doBinop(uint(8), real(64));
+        when (DType.UInt8, DType.Complex64) do doBinop(uint(8), complex(64));
+        when (DType.UInt8, DType.Complex128) do doBinop(uint(8), complex(128));
+        when (DType.UInt16, DType.Bool) do doBinop(uint(16), bool);
+        when (DType.UInt16, DType.Int8) do doBinop(uint(16), int(8));
+        when (DType.UInt16, DType.Int16) do doBinop(uint(16), int(16));
+        when (DType.UInt16, DType.Int32) do doBinop(uint(16), int(32));
+        when (DType.UInt16, DType.Int64) do doBinop(uint(16), int(64));
+        when (DType.UInt16, DType.UInt8) do doBinop(uint(16), uint(8));
+        when (DType.UInt16, DType.UInt16) do doBinop(uint(16), uint(16));
+        when (DType.UInt16, DType.UInt32) do doBinop(uint(16), uint(32));
+        when (DType.UInt16, DType.UInt64) do doBinop(uint(16), uint(64));
+        when (DType.UInt16, DType.Float32) do doBinop(uint(16), real(32));
+        when (DType.UInt16, DType.Float64) do doBinop(uint(16), real(64));
+        when (DType.UInt16, DType.Complex64) do doBinop(uint(16), complex(64));
+        when (DType.UInt16, DType.Complex128) do doBinop(uint(16), complex(128));
+        when (DType.UInt32, DType.Bool) do doBinop(uint(32), bool);
+        when (DType.UInt32, DType.Int8) do doBinop(uint(32), int(8));
+        when (DType.UInt32, DType.Int16) do doBinop(uint(32), int(16));
+        when (DType.UInt32, DType.Int32) do doBinop(uint(32), int(32));
+        when (DType.UInt32, DType.Int64) do doBinop(uint(32), int(64));
+        when (DType.UInt32, DType.UInt8) do doBinop(uint(32), uint(8));
+        when (DType.UInt32, DType.UInt16) do doBinop(uint(32), uint(16));
+        when (DType.UInt32, DType.UInt32) do doBinop(uint(32), uint(32));
+        when (DType.UInt32, DType.UInt64) do doBinop(uint(32), uint(64));
+        when (DType.UInt32, DType.Float32) do doBinop(uint(32), real(32));
+        when (DType.UInt32, DType.Float64) do doBinop(uint(32), real(64));
+        when (DType.UInt32, DType.Complex64) do doBinop(uint(32), complex(64));
+        when (DType.UInt32, DType.Complex128) do doBinop(uint(32), complex(128));
+        when (DType.UInt64, DType.Bool) do doBinop(uint(64), bool);
+        when (DType.UInt64, DType.Int8) do doBinop(uint(64), int(8));
+        when (DType.UInt64, DType.Int16) do doBinop(uint(64), int(16));
+        when (DType.UInt64, DType.Int32) do doBinop(uint(64), int(32));
+        when (DType.UInt64, DType.Int64) do doBinop(uint(64), int(64));
+        when (DType.UInt64, DType.UInt8) do doBinop(uint(64), uint(8));
+        when (DType.UInt64, DType.UInt16) do doBinop(uint(64), uint(16));
+        when (DType.UInt64, DType.UInt32) do doBinop(uint(64), uint(32));
+        when (DType.UInt64, DType.UInt64) do doBinop(uint(64), uint(64));
+        when (DType.UInt64, DType.Float32) do doBinop(uint(64), real(32));
+        when (DType.UInt64, DType.Float64) do doBinop(uint(64), real(64));
+        when (DType.UInt64, DType.Complex64) do doBinop(uint(64), complex(64));
+        when (DType.UInt64, DType.Complex128) do doBinop(uint(64), complex(128));
+        when (DType.Float32, DType.Bool) do doBinop(real(32), bool);
+        when (DType.Float32, DType.Int8) do doBinop(real(32), int(8));
+        when (DType.Float32, DType.Int16) do doBinop(real(32), int(16));
+        when (DType.Float32, DType.Int32) do doBinop(real(32), int(32));
+        when (DType.Float32, DType.Int64) do doBinop(real(32), int(64));
+        when (DType.Float32, DType.UInt8) do doBinop(real(32), uint(8));
+        when (DType.Float32, DType.UInt16) do doBinop(real(32), uint(16));
+        when (DType.Float32, DType.UInt32) do doBinop(real(32), uint(32));
+        when (DType.Float32, DType.UInt64) do doBinop(real(32), uint(64));
+        when (DType.Float32, DType.Float32) do doBinop(real(32), real(32));
+        when (DType.Float32, DType.Float64) do doBinop(real(32), real(64));
+        when (DType.Float32, DType.Complex64) do doBinop(real(32), complex(64));
+        when (DType.Float32, DType.Complex128) do doBinop(real(32), complex(128));
+        when (DType.Float64, DType.Bool) do doBinop(real(64), bool);
+        when (DType.Float64, DType.Int8) do doBinop(real(64), int(8));
+        when (DType.Float64, DType.Int16) do doBinop(real(64), int(16));
+        when (DType.Float64, DType.Int32) do doBinop(real(64), int(32));
+        when (DType.Float64, DType.Int64) do doBinop(real(64), int(64));
+        when (DType.Float64, DType.UInt8) do doBinop(real(64), uint(8));
+        when (DType.Float64, DType.UInt16) do doBinop(real(64), uint(16));
+        when (DType.Float64, DType.UInt32) do doBinop(real(64), uint(32));
+        when (DType.Float64, DType.UInt64) do doBinop(real(64), uint(64));
+        when (DType.Float64, DType.Float32) do doBinop(real(64), real(32));
+        when (DType.Float64, DType.Float64) do doBinop(real(64), real(64));
+        when (DType.Float64, DType.Complex64) do doBinop(real(64), complex(64));
+        when (DType.Float64, DType.Complex128) do doBinop(real(64), complex(128));
+        when (DType.Complex64, DType.Bool) do doBinop(complex(64), bool);
+        when (DType.Complex64, DType.Int8) do doBinop(complex(64), int(8));
+        when (DType.Complex64, DType.Int16) do doBinop(complex(64), int(16));
+        when (DType.Complex64, DType.Int32) do doBinop(complex(64), int(32));
+        when (DType.Complex64, DType.Int64) do doBinop(complex(64), int(64));
+        when (DType.Complex64, DType.UInt8) do doBinop(complex(64), uint(8));
+        when (DType.Complex64, DType.UInt16) do doBinop(complex(64), uint(16));
+        when (DType.Complex64, DType.UInt32) do doBinop(complex(64), uint(32));
+        when (DType.Complex64, DType.UInt64) do doBinop(complex(64), uint(64));
+        when (DType.Complex64, DType.Float32) do doBinop(complex(64), real(32));
+        when (DType.Complex64, DType.Float64) do doBinop(complex(64), real(64));
+        when (DType.Complex64, DType.Complex64) do doBinop(complex(64), complex(64));
+        when (DType.Complex64, DType.Complex128) do doBinop(complex(64), complex(128));
+        when (DType.Complex128, DType.Bool) do doBinop(complex(128), bool);
+        when (DType.Complex128, DType.Int8) do doBinop(complex(128), int(8));
+        when (DType.Complex128, DType.Int16) do doBinop(complex(128), int(16));
+        when (DType.Complex128, DType.Int32) do doBinop(complex(128), int(32));
+        when (DType.Complex128, DType.Int64) do doBinop(complex(128), int(64));
+        when (DType.Complex128, DType.UInt8) do doBinop(complex(128), uint(8));
+        when (DType.Complex128, DType.UInt16) do doBinop(complex(128), uint(16));
+        when (DType.Complex128, DType.UInt32) do doBinop(complex(128), uint(32));
+        when (DType.Complex128, DType.UInt64) do doBinop(complex(128), uint(64));
+        when (DType.Complex128, DType.Float32) do doBinop(complex(128), real(32));
+        when (DType.Complex128, DType.Float64) do doBinop(complex(128), real(64));
+        when (DType.Complex128, DType.Complex64) do doBinop(complex(128), complex(64));
+        when (DType.Complex128, DType.Complex128) do doBinop(complex(128), complex(128));
+        otherwise {
+          const errorMsg = unrecognizedTypeError(pn, "("+dtype2str(left.dtype)+","+dtype2str(right.dtype)+")");
+          omLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);
+          return new MsgTuple(errorMsg, MsgType.ERROR);
+        }
+      }
+    }
 
     /*
       Parse and respond to binopvv message.

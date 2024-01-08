@@ -182,6 +182,40 @@ module NumPyDType
       }
     }
 
+    proc commonType(type a, type b) type {
+      if isIntegralType(a) && isIntegralType(b) {
+        if isSignedIntegerType(a) == isSignedIntegerType(b) {
+          return maxType(a, b);
+        } else {
+          type s = if isSignedIntegerType(a) then a else b;
+          type u = if isSignedIntegerType(a) then b else a;
+          return maxType(promoteToNextSigned(u), s);
+        }
+      } else if isIntegralType(a) && isRealType(b) {
+        return maxType(promoteToNextFloat(a), b);
+      } else if isRealType(a) && isIntegralType(b) {
+        return maxType(promoteToNextFloat(b), a);
+      } else if isIntegralType(a) && isComplexType(b) {
+        return maxType(promoteToNextComplex(a), b);
+      } else if isComplexType(a) && isIntegralType(b) {
+        return maxType(promoteToNextComplex(b), a);
+      } else if isRealType(a) && isRealType(b) {
+        return maxType(a, b);
+      } else if isRealType(a) && isComplexType(b) {
+        return maxType(promoteToNextComplex(a), b);
+      } else if isComplexType(a) && isRealType(b) {
+        return maxType(promoteToNextComplex(b), a);
+      } else if isComplexType(a) && isComplexType(b) {
+        return maxType(a, b);
+      } else {
+        if a == bool && b != bool then
+            return b;
+        else if a != bool && b == bool then
+            return a;
+        else return bool;
+      }
+    }
+
     /*
       Return the dtype that can store the result of
       a division operation between two dtypes
@@ -223,8 +257,50 @@ module NumPyDType
       }
     }
 
+    proc divType(type a, type b) type {
+      if isIntegralType(a) && isIntegralType(b) {
+        return real(64);
+      } else if isIntegralType(a) && isRealType(b) {
+        return if numBytes(a) < 4 && b == real(32)
+          then real(32)
+          else real(64);
+      } else if isRealType(a) && isIntegralType(b) {
+        return if a == real(32) && numBytes(b) < 4
+          then real(32)
+          else real(64);
+      } else if isIntegralType(a) && isComplexType(b) {
+        return maxType(promoteToNextComplex(a), b);
+      } else if isComplexType(a) && isIntegralType(b) {
+        return maxType(promoteToNextComplex(b), a);
+      } else if isRealType(a) && isRealType(b) {
+        return maxType(a, b);
+      } else if isRealType(a) && isComplexType(b) {
+        return maxType(promoteToNextComplex(a), b);
+      } else if isComplexType(a) && isRealType(b) {
+        return maxType(promoteToNextComplex(b), a);
+      } else if isComplexType(a) && isComplexType(b) {
+        return maxType(a, b);
+      } else if isBoolType(a) && isRealType(b) {
+        return b;
+      } else if isRealType(a) && isBoolType(b) {
+        return a;
+      } else if isBoolType(a) && isComplexType(b) {
+        return b;
+      } else if isComplexType(a) && isBoolType(b) {
+        return a;
+      } else {
+        return real(64);
+      }
+    }
+
     private proc maxDType(a: DType, b: DType): DType {
       if dtypeSize(a) >= dtypeSize(b)
+          then return a;
+          else return b;
+    }
+
+    private proc maxType(type a, type b) type {
+      if numBytes(a) >= numBytes(b)
           then return a;
           else return b;
     }
@@ -266,6 +342,22 @@ module NumPyDType
         }
     }
 
+    proc isSignedIntegerType(type t) param : bool {
+      if t == int(8) then return true;
+      if t == int(16) then return true;
+      if t == int(32) then return true;
+      if t == int then return true;
+      return false;
+    }
+
+    proc isUnsignedIntegerType(type t) param : bool {
+      if t == uint(8) then return true;
+      if t == uint(16) then return true;
+      if t == uint(32) then return true;
+      if t == uint then return true;
+      return false;
+    }
+
     private proc promoteToNextSigned(dt: DType): DType {
       select dt {
         when DType.Bool do return DType.Int8;
@@ -283,6 +375,23 @@ module NumPyDType
         when DType.Complex128 do return DType.Complex128;
         otherwise do return DType.UNDEF;
       }
+    }
+
+    private proc promoteToNextSigned(type t) type {
+      if t == bool then return int(8);
+      if t == uint(8) then return int(16);
+      if t == uint(16) then return int(32);
+      if t == uint(32) then return int(64);
+      if t == uint then return real(64);
+      if t == int(8) then return int(16);
+      if t == int(16) then return int(32);
+      if t == int(32) then return int(64);
+      if t == int then return real(64);
+      if t == real(32) then return real(64);
+      if t == real then return real(64);
+      if t == complex(64) then return complex(128);
+      if t == complex(128) then return complex(128);
+      return int(64);
     }
 
     private proc promoteToNextFloat(dt: DType): DType {
@@ -304,6 +413,23 @@ module NumPyDType
       }
     }
 
+    private proc promoteToNextFloat(type t) type {
+      if t == bool then return real(32);
+      if t == uint(8) then return real(32);
+      if t == uint(16) then return real(32);
+      if t == uint(32) then return real(64);
+      if t == uint then return real(64);
+      if t == int(8) then return real(32);
+      if t == int(16) then return real(32);
+      if t == int(32) then return real(64);
+      if t == int then return real(64);
+      if t == real(32) then return real(64);
+      if t == real then return real(64);
+      if t == complex(64) then return complex(128);
+      if t == complex(128) then return complex(128);
+      return real(64);
+    }
+
     private proc promoteToNextComplex(dt: DType): DType {
       select dt {
         when DType.Bool do return DType.Complex64;
@@ -321,5 +447,22 @@ module NumPyDType
         when DType.Complex128 do return DType.Complex128;
         otherwise do return DType.UNDEF;
       }
+    }
+
+    private proc promoteToNextComplex(type t) type {
+      if t == bool then return complex(64);
+      if t == uint(8) then return complex(64);
+      if t == uint(16) then return complex(64);
+      if t == uint(32) then return complex(128);
+      if t == uint then return complex(128);
+      if t == int(8) then return complex(64);
+      if t == int(16) then return complex(64);
+      if t == int(32) then return complex(128);
+      if t == int then return complex(128);
+      if t == real(32) then return complex(64);
+      if t == real then return complex(128);
+      if t == complex(64) then return complex(128);
+      if t == complex(128) then return complex(128);
+      return complex(128);
     }
 }
