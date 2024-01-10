@@ -51,23 +51,27 @@ module OperatorMsg
       proc doBinop(type lt, type rt): MsgTuple throws
         where isSupportedType(lt) && isSupportedType(rt)
       {
-        type resultType = if op == "/"
-             then divType(lt, rt)
-             else if comparisonOps.contains(op)
-                then bool
-                else commonType(lt, rt);
+        if op == "/" then return doBinopRet(lt, rt, divType(lt, rt));
+        else if comparisonOps.contains(op) then return doBinopRet(lt, rt, bool);
+        else return doBinopRet(lt, rt, commonType(lt, rt));
+      }
 
-        if !isSupportedType(resultType) {
-          const errorMsg = unsupportedTypeError(resultType, pn);
-          omLogger.error(getModuleName(), pn, getLineNumber(),errorMsg);
-          return new MsgTuple(errorMsg, MsgType.ERROR);
-        }
+      proc doBinop(type lt, type rt): MsgTuple throws
+        where !isSupportedType(lt) || !isSupportedType(rt)
+      {
+        const errorMsg = unsupportedTypeError(if !isSupportedType(lt) then lt else rt, pn);
+        omLogger.error(getModuleName(), pn, getLineNumber(),errorMsg);
+        return new MsgTuple(errorMsg, MsgType.ERROR);
+      }
 
-        var e = st.addEntry(rname, l.tupShape, resultType);
+      proc doBinopRet(type lt, type rt, type et): MsgTuple throws
+        where isSupportedType(et)
+      {
         const l = toSymEntry(left, lt, nd),
               r = toSymEntry(right, rt, nd);
+        var e = st.addEntry(rname, (...l.tupShape), et);
 
-        const success = doBinOpvv(l, r, e, op);
+        const success = doBinOpvv(l.a, r.a, e.a, op);
 
         if success {
           const repMsg = "created %s".doFormat(st.attrib(rname));
@@ -80,10 +84,10 @@ module OperatorMsg
         }
       }
 
-      proc doBinop(type lt, type rt): MsgTuple throws
-        where !isSupportedType(lt) || !isSupportedType(rt)
+      proc doBinopRet(type lt, type rt, type et): MsgTuple throws
+        where !isSupportedType(et)
       {
-        const errorMsg = unsupportedTypeError(if !isSupportedType(lt) then lt else rt, pn);
+        const errorMsg = unsupportedTypeError(et, pn);
         omLogger.error(getModuleName(), pn, getLineNumber(),errorMsg);
         return new MsgTuple(errorMsg, MsgType.ERROR);
       }
@@ -279,7 +283,7 @@ module OperatorMsg
       :returns: (MsgTuple) 
       :throws: `UndefinedSymbolError(name)`
     */
-    proc binopvvMsg(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab): MsgTuple throws {       
+    proc binopvvMsgOld(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab): MsgTuple throws {       
         param pn = Reflection.getRoutineName();
         var repMsg: string; // response message
         
@@ -2445,7 +2449,6 @@ module OperatorMsg
     }
 
     use CommandMap;
-    registerFunction("binopvv", binopvvMsg, getModuleName());
     registerFunction("binopvs", binopvsMsg, getModuleName());
     registerFunction("binopsv", binopsvMsg, getModuleName());
     registerFunction("opeqvv", opeqvvMsg, getModuleName());

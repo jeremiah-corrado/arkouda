@@ -64,8 +64,8 @@ module BinOp
         bitwiseShiftOps: domain(string) = {"<<", ">>"},
         bitwiseRotOps: domain(string) = {"<<<", ">>>"},
         comparisonOps: domain(string) = {"==", "!=", "<", ">", "<=", ">="},
-        basicArithmetic: domain(string) = {"+", "-", "*"},
-        fancyArithmetic: domain(string) = {"/", "//", "%", "**"};
+        basicArithmeticOps: domain(string) = {"+", "-", "*"},
+        fancyArithmeticOps: domain(string) = {"/", "//", "%", "**"};
 
   // get the op-category
   // assumes the op is valid
@@ -74,17 +74,17 @@ module BinOp
     if bitwiseShiftOps.contains(op) then return opCategory.bitwiseShift;
     if bitwiseRotOps.contains(op) then return opCategory.bitwiseRot;
     if comparisonOps.contains(op) then return opCategory.comparison;
-    if arithmeticOps.contains(op) then return opCategory.arithmetic;
+    if basicArithmeticOps.contains(op) then return opCategory.basicArithmetic;
     else return opCategory.fancyArithmetic;
   }
 
   proc isValidOperator(op: string): bool {
     return bitwiseLogicOps.contains(op) || bitwiseShiftOps.contains(op) ||
            bitwiseRotOps.contains(op) || comparisonOps.contains(op) ||
-           basicArithmetic.contains(op) || fancyArithmetic.contains(op);
+           basicArithmeticOps.contains(op) || fancyArithmeticOps.contains(op);
   }
 
-  proc doBinOpvv(const ref l: [] ?lt, const ref r: [] ?rt, ref e: [] ?et op: string): bool throws {
+  proc doBinOpvv(const ref l: [] ?lt, const ref r: [] ?rt, ref e: [] ?et, op: string): bool throws {
     select getOpCategory(op) {
       when opCategory.bitwiseLogic {
         if (isIntegralType(lt) || lt == bool ) && (isIntegralType(rt) || rt == bool) {
@@ -201,12 +201,12 @@ module BinOp
       }
       when opCategory.basicArithmetic {
         select op {
-          when "+" do e = lCast:et + rCast:et;
-          when "-" do e = lCast:et - rCast:et;
-          when "*" do e = lCast:et * rCast:et;
+          when "+" do e = l:et + r:et;
+          when "-" do e = l:et - r:et;
+          when "*" do e = l:et * r:et;
           otherwise halt("unreachable");
-          return true;
         }
+        return true;
       }
       when opCategory.fancyArithmetic {
         const lCast = if lt == bool then l:int(8) else l,
@@ -228,7 +228,7 @@ module BinOp
               } else {
                 e = lCast**rCast;
               }
-            };
+            }
             otherwise halt("unreachable");
           }
           return true;
@@ -238,17 +238,55 @@ module BinOp
           select op {
             when "/" do e = lCast:real / rCast:real;
             when "//" do
-              e = [(li, ri) in zip(lCast, rCast)] floorDivisionHelper(li, ri):et;
+              e = [(li, ri) in zip(lCast, rCast)] floorDivisionHelper(li:real, ri:real):et;
             when "%" do
-              e = [(li, ri) in zip(lCast, rCast)] modHelper(li, ri):et;
+              e = [(li, ri) in zip(lCast, rCast)] modHelper(li:real, ri:real):et;
             when "**" do return false;
             otherwise halt("unreachable");
           }
-        } else if 
+        } else if (isSignedIntegerType(lCast.eltType) && isRealType(rCast.eltType)) ||
+                  (isRealType(lCast.eltType) && isSignedIntegerType(rCast.eltType)) ||
+                  (isRealType(lCast.eltType) && isRealType(rCast.eltType))
+        {
+          select op {
+            when "/" do e = lCast / rCast;
+            when "//" do e = [(li, ri) in zip(lCast, rCast)] floorDivisionHelper(li, ri):et;
+            when "%" do e = [(li, ri) in zip(lCast, rCast)] modHelper(li, ri):et;
+            when "**" do e = lCast**rCast;
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if (isUnsignedIntegerType(lCast.eltType) && isRealType(lCast.eltType)) ||
+                  (isRealType(lCast.eltType) && isUnsignedIntegerType(lCast.eltType))
+        {
+          select op {
+            when "/" do e = lCast:et / rCast:et;
+            when "//" do e = [(li, ri) in zip(lCast, rCast)] floorDivisionHelper(li, ri):et;
+            when "%" do e = [(li, ri) in zip(lCast, rCast)] modHelper(li, ri):et;
+            when "**" do e = lCast:et**rCast:et;
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else if (SupportsComplex64 || SupportsComplex128) && (
+                    (isComplexType(lt) && (isIntegralType(rt) || rt == bool || isRealType(rt))) ||
+                    ((isIntegralType(lt) || lt == bool || isRealType(lt)) && isComplexType(rt)) ||
+                    (isComplexType(lt) && isComplexType(rt))
+                  )
+        {
+          select op {
+            when "/" do e = lCast:et / rCast:et;
+            when "//" do return false;
+            when "%" do return false;
+            when "**" do e = lCast:et**rCast:et;
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
       }
       otherwise halt("unreachable");
     }
-    otherwise halt("unreachable");
   }
 
   private proc lBitShift(ref e, const ref l, const ref r) {
@@ -284,7 +322,7 @@ module BinOp
   :returns: (MsgTuple) 
   :throws: `UndefinedSymbolError(name)`
   */
-  proc doBinOpvv(l, r, e, op: string, rname, pn, st) throws {
+  proc doBinOpvvOld(l, r, e, op: string, rname, pn, st) throws {
     if e.etype == bool {
       // Since we know that the result type is a boolean, we know
       // that it either (1) is an operation between bools or (2) uses
