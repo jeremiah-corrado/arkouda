@@ -53,6 +53,7 @@ module OperatorMsg
       {
         if op == "/" then return doBinopRet(lt, rt, divType(lt, rt));
         else if comparisonOps.contains(op) then return doBinopRet(lt, rt, bool);
+        else if bitwiseShiftOps.contains(op) then return doBinopRet(lt, rt, commonType(lt, rt, true));
         else return doBinopRet(lt, rt, commonType(lt, rt));
       }
 

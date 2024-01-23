@@ -57,7 +57,8 @@ module BinOp
     bitwiseRot,
     comparison,
     basicArithmetic,
-    fancyArithmetic
+    fancyArithmetic,
+    trueDivision
   }
 
   const bitwiseLogicOps: domain(string) = {"|", "&", "^"},
@@ -65,29 +66,33 @@ module BinOp
         bitwiseRotOps: domain(string) = {"<<<", ">>>"},
         comparisonOps: domain(string) = {"==", "!=", "<", ">", "<=", ">="},
         basicArithmeticOps: domain(string) = {"+", "-", "*"},
-        fancyArithmeticOps: domain(string) = {"/", "//", "%", "**"};
+        fancyArithmeticOps: domain(string) = {"//", "%", "**"};
 
   // get the op-category
-  // assumes the op is valid
+  // assumes the op has already been validated
   private proc getOpCategory(op: string): opCategory {
     if bitwiseLogicOps.contains(op) then return opCategory.bitwiseLogic;
     if bitwiseShiftOps.contains(op) then return opCategory.bitwiseShift;
     if bitwiseRotOps.contains(op) then return opCategory.bitwiseRot;
     if comparisonOps.contains(op) then return opCategory.comparison;
     if basicArithmeticOps.contains(op) then return opCategory.basicArithmetic;
-    else return opCategory.fancyArithmetic;
+    if fancyArithmeticOps.contains(op) then return opCategory.fancyArithmetic;
+    else return opCategory.trueDivision;
   }
 
   proc isValidOperator(op: string): bool {
     return bitwiseLogicOps.contains(op) || bitwiseShiftOps.contains(op) ||
            bitwiseRotOps.contains(op) || comparisonOps.contains(op) ||
-           basicArithmeticOps.contains(op) || fancyArithmeticOps.contains(op);
+           basicArithmeticOps.contains(op) || fancyArithmeticOps.contains(op) ||
+           op == "/";
   }
 
   proc doBinOpvv(const ref l: [] ?lt, const ref r: [] ?rt, ref e: [] ?et, op: string): bool throws {
     select getOpCategory(op) {
       when opCategory.bitwiseLogic {
-        if (isIntegralType(lt) || lt == bool ) && (isIntegralType(rt) || rt == bool) {
+        if et != commonType(lt, rt) {
+          return false;
+        } else if (isIntegralType(lt) || lt == bool ) && (isIntegralType(rt) || rt == bool) {
           select op {
             when "|" do e = l | r;
             when "&" do e = l & r;
@@ -100,31 +105,33 @@ module BinOp
         }
       }
       when opCategory.bitwiseShift {
-        if isIntegralType(lt) && isIntegralType(rt) {
+        if et != commonType(lt, rt, true) {
+          return false;
+        } else if isIntegralType(lt) && isIntegralType(rt) {
           select op {
-            when "<<" do lBitShift(e, l:et, r:et);
-            when ">>" do rBitShift(e, l:et, r:et);
+            when "<<" do lBitShift(e, l, r, et, et);
+            when ">>" do rBitShift(e, l, r, et, et);
             otherwise halt("unreachable");
           }
           return true;
         } else if lt == bool && isIntegralType(rt) {
           select op {
-            when "<<" do lBitShift(e, l:int(8), r);
-            when ">>" do rBitShift(e, l:int(8), r);
+            when "<<" do lBitShift(e, l, r, int(8), rt);
+            when ">>" do rBitShift(e, l, r, int(8), rt);
             otherwise halt("unreachable");
           }
           return true;
         } else if isIntegralType(lt) && rt == bool {
           select op {
-            when "<<" do lBitShift(e, l, r:int(8));
-            when ">>" do rBitShift(e, l, r:int(8));
+            when "<<" do lBitShift(e, l, r, lt, int(8));
+            when ">>" do rBitShift(e, l, r, lt, int(8));
             otherwise halt("unreachable");
           }
           return true;
         } else if lt == bool && rt == bool {
           select op {
-            when "<<" do lBitShift(e, l:int(8), r:int(8));
-            when ">>" do rBitShift(e, l:int(8), r:int(8));
+            when "<<" do lBitShift(e, l, r, int(8), int(8));
+            when ">>" do rBitShift(e, l, r, int(8), int(8));
             otherwise halt("unreachable");
           }
           return true;
@@ -133,7 +140,9 @@ module BinOp
         }
       }
       when opCategory.bitwiseRot {
-        if isIntegralType(lt) && isIntegralType(rt) {
+        if et != commonType(lt, rt) {
+          return false;
+        } else if isIntegralType(lt) && isIntegralType(rt) {
           select op {
             when "<<<" do e = rotl(l, r);
             when ">>>" do e = rotr(l, r);
@@ -145,7 +154,9 @@ module BinOp
         }
       }
       when opCategory.comparison {
-        if ((isIntegralType(lt) || lt == bool) && (isIntegralType(rt) || rt == bool)) ||
+        if et != bool {
+          return false;
+        } else if ((isIntegralType(lt) || lt == bool) && (isIntegralType(rt) || rt == bool)) ||
            (isRealType(lt) && isRealType(rt))
         {
           select op {
@@ -200,13 +211,19 @@ module BinOp
         }
       }
       when opCategory.basicArithmetic {
-        select op {
-          when "+" do e = l:et + r:et;
-          when "-" do e = l:et - r:et;
-          when "*" do e = l:et * r:et;
-          otherwise halt("unreachable");
+        if et != commonType(lt, rt) {
+          return false;
+        } else if lt == bool && rt == bool {
+          return false
+        } else {
+          select op {
+            when "+" do e = l:et + r:et;
+            when "-" do e = l:et - r:et;
+            when "*" do e = l:et * r:et;
+            otherwise halt("unreachable");
+          }
+          return true;
         }
-        return true;
       }
       when opCategory.fancyArithmetic {
         const lCast = if lt == bool then l:int(8) else l,
@@ -216,7 +233,6 @@ module BinOp
            (isUnsignedIntegerType(lCast.eltType) && isUnsignedIntegerType(rCast.eltType))
         {
           select op {
-            when "/" do e = lCast:real / rCast:real;
             when "//" do
               e = [(li, ri) in zip(lCast, rCast)] if ri != 0 then li/ri else 0;
             when "%" do
@@ -236,7 +252,6 @@ module BinOp
                   (isUnsignedIntegerType(lCast.eltType) && isSignedIntegerType(rCast.eltType))
         {
           select op {
-            when "/" do e = lCast:real / rCast:real;
             when "//" do
               e = [(li, ri) in zip(lCast, rCast)] floorDivisionHelper(li:real, ri:real):et;
             when "%" do
@@ -249,7 +264,6 @@ module BinOp
                   (isRealType(lCast.eltType) && isRealType(rCast.eltType))
         {
           select op {
-            when "/" do e = lCast / rCast;
             when "//" do e = [(li, ri) in zip(lCast, rCast)] floorDivisionHelper(li, ri):et;
             when "%" do e = [(li, ri) in zip(lCast, rCast)] modHelper(li, ri):et;
             when "**" do e = lCast**rCast;
@@ -260,7 +274,6 @@ module BinOp
                   (isRealType(lCast.eltType) && isUnsignedIntegerType(lCast.eltType))
         {
           select op {
-            when "/" do e = lCast:et / rCast:et;
             when "//" do e = [(li, ri) in zip(lCast, rCast)] floorDivisionHelper(li, ri):et;
             when "%" do e = [(li, ri) in zip(lCast, rCast)] modHelper(li, ri):et;
             when "**" do e = lCast:et**rCast:et;
@@ -285,16 +298,41 @@ module BinOp
           return false;
         }
       }
+      when opCategory.trueDivision {
+        if et != divType(lt, rt) {
+          return false;
+        } else {
+          const lCast = if lt == bool then l:int(8) else l,
+                rCast = if rt == bool then r:int(8) else r;
+
+          if isIntegralType(lCast.eltType) && isIntegralType(rCast.eltType) {
+            e = lCast:real / rCast:real;
+          } else if (isRealType(lCast.eltType) && isRealType(rCast.eltType)) ||
+                    (isRealType(lCast.eltType) && isSignedIntegerType(rCast.eltType)) ||
+                    (isSignedIntegerType(lCast.eltType) && isRealType(rCast.eltType))
+          {
+            e = lCast / rCast;
+          } else {
+            e = lCast:et / rCast:et;
+          }
+
+          return true;
+        }
+      }
       otherwise halt("unreachable");
     }
   }
 
-  private proc lBitShift(ref e, const ref l, const ref r) {
-    [(ei, li, ri,) in zip(l, r, e)] ei = if ri < 64 && ri >= 0 then li << ri else 0;
+  private proc lBitShift(ref e, const ref l, const ref r, type leftCast, type rightCast) {
+    // [(ei, li, ri,) in zip(l, r, e)] ei = if ri < 64 && ri >= 0 then li << ri else 0;
+    forall (ei, li, ri) in zip(l:leftCast, r:rightCast, e)
+      do ei = if ri < 64 && ri >= 0 then li << ri else 0;
   }
 
-  private proc rBitShift(ref e, const ref l, const ref r) {
-    [(ei, li, ri,) in zip(l, r, e)] ei = if ri < 64 && ri >= 0 then li >> ri else 0;
+  private proc rBitShift(ref e, const ref l, const ref r, type leftCast, type rightCast) {
+    // [(ei, li, ri,) in zip(l, r, e)] ei = if ri < 64 && ri >= 0 then li >> ri else 0;
+    forall (ei, li, ri) in zip(l:leftCast, r:rightCast, e)
+      do ei = if ri < 64 && ri >= 0 then li >> ri else 0;
   }
 
   /*

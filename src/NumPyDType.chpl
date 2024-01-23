@@ -182,7 +182,7 @@ module NumPyDType
       }
     }
 
-    proc commonType(type a, type b) type {
+    proc commonType(type a, type b, param shiftOp: bool = false) type {
       if isIntegralType(a) && isIntegralType(b) {
         if isSignedIntegerType(a) == isSignedIntegerType(b) {
           return maxType(a, b);
@@ -212,7 +212,7 @@ module NumPyDType
             return b;
         else if a != bool && b == bool then
             return a;
-        else return bool;
+        else return if shiftOp then int(8) else bool;
       }
     }
 
