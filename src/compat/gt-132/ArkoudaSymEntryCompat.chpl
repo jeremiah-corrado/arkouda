@@ -52,7 +52,7 @@ module ArkoudaSymEntryCompat {
     :arg etype: type to be instantiated
     :type etype: type
   */
-  proc SymEntry.init(args: int ...?N, type etype) {
+  proc SymEntry.init(args: int ...?N, type etype, max_bits=-1) {
     var len = 1;
     for i in 0..#N {
       len *= args[i];
@@ -65,6 +65,7 @@ module ArkoudaSymEntryCompat {
     this.dimensions = N;
     this.tupShape = args;
     this.a = try! makeDistArray((...args), etype);
+    this.max_bits = max_bits;
     init this;
     this.shape = tupShapeString(this.tupShape);
   }
@@ -84,7 +85,7 @@ module ArkoudaSymEntryCompat {
     this.dimensions = D.rank;
     this.tupShape = D.shape;
     this.a = a;
-    this.max_bits=max_bits;
+    this.max_bits = max_bits;
     init this;
     this.shape = tupShapeString(this.tupShape);
   }

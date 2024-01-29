@@ -68,8 +68,12 @@ module BinOp
         basicArithmeticOps: domain(string) = {"+", "-", "*"},
         fancyArithmeticOps: domain(string) = {"//", "%", "**"};
 
-  // get the op-category
-  // assumes the op has already been validated
+  /*
+    Get the category of an operator string
+
+    This procedure assumes that the operator has already been validated,
+    (it will not throw an error if the operator is not valid)
+  */
   private proc getOpCategory(op: string): opCategory {
     if bitwiseLogicOps.contains(op) then return opCategory.bitwiseLogic;
     if bitwiseShiftOps.contains(op) then return opCategory.bitwiseShift;
@@ -80,6 +84,9 @@ module BinOp
     else return opCategory.trueDivision;
   }
 
+  /*
+    check if an operator string matches one of the valid operators
+  */
   proc isValidOperator(op: string): bool {
     return bitwiseLogicOps.contains(op) || bitwiseShiftOps.contains(op) ||
            bitwiseRotOps.contains(op) || comparisonOps.contains(op) ||
@@ -87,7 +94,27 @@ module BinOp
            op == "/";
   }
 
-  proc doBinOpvv(const ref l: [] ?lt, const ref r: [] ?rt, ref e: [] ?et, op: string): bool throws {
+  private proc computeBigintMaxSize(max_bits: int): (bool, bigint) {
+    const has_max_bits = max_bits != -1;
+    var max_size = 1:bigint;
+    if has_max_bits {
+      max_size <<= max_bits;
+      max_size -= 1;
+    }
+    return (has_max_bits, max_size);
+  }
+
+  /*
+    Execute a binary operation between two scalar pdarrays according Numpy's rules
+
+    :arg l: the array for the left hand side of the operation
+    :arg r: the array for the right hand side of the operation
+    :arg e: the array to store the result of the operation in
+    :returns: a bool indicating whether ``et`` = ``lt`` ``op`` ``rt`` follows Numpy's operator/promotion rules
+              if ``false`` an error should be thrown by the caller
+              if ``true`` the operation can be considered successful
+  */
+  proc doBinOpvv(const ref l: [] ?lt, const ref r: [] ?rt, ref e: [] ?et, op: string) : bool {
     select getOpCategory(op) {
       when opCategory.bitwiseLogic {
         if et != commonType(lt, rt) {
@@ -105,7 +132,8 @@ module BinOp
         }
       }
       when opCategory.bitwiseShift {
-        if et != commonType(lt, rt, true) {
+        // shifts that result in real/complex result types are not supported
+        if et != commonType(lt, rt, true) || isRealType(et) || isComplexType(et) {
           return false;
         } else if isIntegralType(lt) && isIntegralType(rt) {
           select op {
@@ -214,7 +242,7 @@ module BinOp
         if et != commonType(lt, rt) {
           return false;
         } else if lt == bool && rt == bool {
-          return false
+          return false;
         } else {
           select op {
             when "+" do e = l:et + r:et;
@@ -226,6 +254,8 @@ module BinOp
         }
       }
       when opCategory.fancyArithmetic {
+        if et != commonType(lt, rt, true) then return false;
+
         const lCast = if lt == bool then l:int(8) else l,
               rCast = if rt == bool then r:int(8) else r;
 
@@ -321,18 +351,245 @@ module BinOp
       }
       otherwise halt("unreachable");
     }
+    return false; // here to make the compiler happy
   }
 
   private proc lBitShift(ref e, const ref l, const ref r, type leftCast, type rightCast) {
     // [(ei, li, ri,) in zip(l, r, e)] ei = if ri < 64 && ri >= 0 then li << ri else 0;
-    forall (ei, li, ri) in zip(l:leftCast, r:rightCast, e)
+    forall (li, ri, ei) in zip(l:leftCast, r:rightCast, e)
       do ei = if ri < 64 && ri >= 0 then li << ri else 0;
   }
 
   private proc rBitShift(ref e, const ref l, const ref r, type leftCast, type rightCast) {
     // [(ei, li, ri,) in zip(l, r, e)] ei = if ri < 64 && ri >= 0 then li >> ri else 0;
-    forall (ei, li, ri) in zip(l:leftCast, r:rightCast, e)
+    forall (li, ri, ei) in zip(l:leftCast, r:rightCast, e)
       do ei = if ri < 64 && ri >= 0 then li >> ri else 0;
+  }
+
+  /*
+    Execute a binary operation between two scalar pdarrays where at least one of the operands is a bigint
+
+    :arg l: the array for the left hand side of the operation
+    :arg r: the array for the right hand side of the operation
+    :arg e: the array to store the result of the operation in
+    :returns: a bool indicating whether ``et`` = ``lt`` ``op`` ``rt`` follows Numpy's operator/promotion rules
+              if ``false`` an error should be thrown by the caller
+              if ``true`` the operation can be considered successful
+  */
+  proc doBinOpvvBigint(const ref l: [] ?lt, const ref r: [] ?rt, ref e: [] ?et, op: string, max_bits: bigint): bool throws {
+    if isRealType(lt) || isComplexType(lt) ||
+       isRealType(rt) || isComplexType(rt)
+        then return false;
+
+    const (has_max_bits, max_size) = computeBigintMaxSize(max_bits);
+
+    // copy l into e
+    // allows more memory efficient op= operations to be used below
+    e = if lt == bigint then l else l:bigint;
+
+    select getOpCategory(op) {
+      when opCategory.bitwiseLogic {
+        // bitwise ops are only supported between two bigints
+        if lt == bigint && rt == bigint {
+          select op {
+            when "|" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                ei |= ri;
+                if has_max_bits then ei &= lms;
+              }
+            }
+            when "&" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                ei &= ri;
+                if has_max_bits then ei &= lms;
+              }
+            }
+            when "^" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                ei ^= ri;
+                if has_max_bits then ei &= lms;
+              }
+            }
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+      when opCategory.trueDivision {
+        // true division is only supported between two bigints
+        if lt == bigint && rt == bigint {
+          forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+            ei /= ri;
+            if has_max_bits then ei &= lms;
+          }
+        } else {
+          return false;
+        }
+      }
+      when opCategory.bitwiseShift {
+        if lt == bigint && (rt == bigint || isIntegralType(rt)) {
+          select op {
+            when "<<" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                if has_max_bits {
+                  if ri >= max_bits {
+                    ei = 0;
+                  } else {
+                    ei <<= ri;
+                    ei &= lms;
+                  }
+                } else {
+                  ei <<= ri;
+                }
+              }
+            }
+            when ">>" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                if has_max_bits {
+                  if ri >= max_bits {
+                    ei = 0;
+                  } else {
+                    rightShiftEq(ei, ri); // ei >>= ri;
+                    ei &= lms;
+                  }
+                } else {
+                  rightShiftEq(ei, ri); // ei >>= ri;
+                }
+              }
+            }
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+      when opCategory.bitwiseRot {
+        if lt == bigint && (rt == bigint || isIntegralType(rt)) {
+          const leftCpy = l;
+          select op {
+            when "<<<" {
+              if !has_max_bits then throw new Error("<<< requires max_bits to be set");
+              forall (ei, li, ri) in zip(e, leftCpy, r) with (var lms = max_size, var lmb = max_bits) {
+                const moddedShift = if isSignedIntegerType(rt) then ri % lmb else ri % lmb:uint;
+                ei <<= moddedShift;
+                const shiftAmt = if isSignedIntegerType(rt) then lmb - moddedShift else lmb:uint - moddedShift;
+                rightShiftEq(li, shiftAmt);
+                ei += li;
+                ei &= lms;
+              }
+            }
+            when ">>>" {
+              if !has_max_bits then throw new Error(">>> requires max_bits to be set");
+              forall (ei, li, ri) in zip(e, leftCpy, r) with (var lms = max_size, var lmb = max_bits) {
+                const moddedShift = if isSignedIntegerType(rt) then ri % lmb else ri % lmb:uint;
+                rightShiftEq(ei, moddedShift);
+                const shiftAmt = if isSignedIntegerType(rt) then lmb - moddedShift else lmb:uint - moddedShift;
+                li <<= shiftAmt;
+                ei += li;
+                ei &= lms;
+              }
+            }
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+      when opCategory.fancyArithmetic {
+        if lt == bigint && (rt == bigint || isIntegralType(rt)) {
+          select op {
+            when "//" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                if ri == 0 {
+                  ei = 0:bigint;
+                } else {
+                  ei /= ri;
+                  if has_max_bits then ei &= lms;
+                }
+              }
+            }
+            when "%" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                if ri == 0 {
+                  ei = 0:bigint;
+                } else {
+                  ei %= ri;
+                  if has_max_bits then ei &= lms;
+                }
+              }
+            }
+            when "**" {
+              if || reduce (r < 0)
+                then throw new Error("Attempt to exponentiate base of type BigInt to negative exponent");
+              if has_max_bits {
+                forall (ei, ri) in zip(e, r) with (var lms = max_size) do
+                  powMod(ei, ei, ri, lms+1);
+              } else {
+                forall (ei, ri) in zip(e, r) do
+                  ei **= ri:uint;
+              }
+            }
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+      when opCategory.basicArithmetic {
+        if (lt == bigint && rt == bigint) ||
+           (lt == bigint && (isIntegralType(rt) || rt == bool)) ||
+           (rt == bigint && (isIntegralType(lt) || lt == bool))
+        {
+          select op {
+            when "+" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                ei += ri;
+                if has_max_bits then ei &= lms;
+              }
+            }
+            when "-" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                ei -= ri;
+                if has_max_bits then ei &= lms;
+              }
+            }
+            when "*" {
+              forall (ei, ri) in zip(e, r) with (var lms = max_size) {
+                ei *= ri;
+                if has_max_bits then ei &= lms;
+              }
+            }
+            otherwise halt("unreachable");
+          }
+          return true;
+        } else {
+          return false;
+        }
+      }
+    }
+    return false;
+  }
+
+  proc doBigintBinOpvvCmp(const ref l: [] ?lt, const ref r: [] ?rt, ref e: [] bool, op: string): bool {
+    if isRealType(lt) || isComplexType(lt) ||
+       isRealType(rt) || isComplexType(rt)
+        then return false;
+
+    select op {
+      when "==" do e = l == r;
+      when "!=" do e = l != r;
+      when "<" do e = l < r;
+      when ">" do e = l > r;
+      when "<=" do e = l <= r;
+      when ">=" do e = l >= r;
+      otherwise halt("unreachable");
+    }
+    return true;
   }
 
   /*
@@ -1476,7 +1733,7 @@ module BinOp
     return new MsgTuple(errorMsg, MsgType.ERROR);
   }
 
-  proc doBigIntBinOpvv(l, r, op: string) throws {
+  proc doBigIntBinOpvvOld(l, r, op: string) throws {
     var max_bits = max(l.max_bits, r.max_bits);
     var max_size = 1:bigint;
     var has_max_bits = max_bits != -1;
@@ -1493,7 +1750,7 @@ module BinOp
 
     // had to create bigint specific BinOp procs which return
     // the distributed array because we need it at SymEntry creation time
-    if l.etype == bigint && r.etype == bigint {
+    if l.etype == bigint && r.etype == bigint { // {&, |, ^, /}
       // first we try the ops that only work with
       // both being bigint
       select op {
@@ -1535,6 +1792,7 @@ module BinOp
         }
       }
     }
+    // {<<, >>, <<<, >>>, //, %, **}
     if l.etype == bigint && (r.etype == bigint || r.etype == int || r.etype == uint) {
       // then we try the ops that only work with a
       // left hand side of bigint
@@ -1656,6 +1914,7 @@ module BinOp
         }
       }
     }
+    // {+, -, *}
     if (l.etype == bigint && r.etype == bigint) ||
        (l.etype == bigint && (r.etype == int || r.etype == uint || r.etype == bool)) ||
        (r.etype == bigint && (l.etype == int || l.etype == uint || l.etype == bool)) {
