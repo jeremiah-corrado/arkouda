@@ -205,7 +205,7 @@ class pdarray:
         try:
             logger.debug(f"deleting pdarray with name {self.name}")
             generic_msg(cmd="delete", args={"name": self.name})
-        except (RuntimeError, AttributeError):
+        except (RuntimeError, AttributeError, ModuleNotFoundError):
             pass
 
     def __bool__(self) -> builtins.bool:

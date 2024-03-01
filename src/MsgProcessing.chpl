@@ -297,8 +297,8 @@ module MsgProcessing
         mpLogger.debug(getModuleName(),getRoutineName(),getLineNumber(), 
                                               "cmd: %s name: %s threshold: %i".doFormat(
                                                cmd,name,printThresh));  
-                                               
-        repMsg  = st.datastr(name,printThresh);        
+
+        repMsg  = st.datastr(name,printThresh);
         mpLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);  
         return new MsgTuple(repMsg,MsgType.NORMAL);
     }

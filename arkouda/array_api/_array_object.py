@@ -118,16 +118,16 @@ class Array:
         """
         return self._array.__repr__()
 
-    # # This function is not required by the spec, but we implement it here for
-    # # convenience so that np.asarray(np.array_api.Array) will work.
-    # def __array__(self, dtype: None | np.dtype[Any] = None) -> npt.NDArray[Any]:
-    #     """
-    #     Warning: this method is NOT part of the array API spec. Implementers
-    #     of other libraries need not include it, and users should not assume it
-    #     will be present in other implementations.
+    # This function is not required by the spec, but we implement it here for
+    # convenience so that np.asarray(np.array_api.Array) will work.
+    def __array__(self, dtype: None | np.dtype[Any] = None) -> npt.NDArray[Any]:
+        """
+        Warning: this method is NOT part of the array API spec. Implementers
+        of other libraries need not include it, and users should not assume it
+        will be present in other implementations.
 
-    #     """
-    #     return ak.asarray(self._array, dtype=dtype)
+        """
+        return ak.asarray(self._array, dtype=dtype)
 
     # These are various helper functions to make the array behavior match the
     # spec in places where it either deviates from or is more strict than
@@ -307,8 +307,6 @@ class Array:
         if isinstance(other, Array) and isinstance(self, Array):
             return self._array == other._array
         elif isinstance(self, Array) and self._has_single_elem():
-            print(self._array)
-            print(type(self._array))
             return self._array[0] == other
         else:
             raise ValueError("Not implemented")

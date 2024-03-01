@@ -254,29 +254,58 @@ module MultiTypeSymEntry
             :returns: s (string) containing the array data
         */
         override proc entry__str__(thresh:int=6, prefix:string = "[", suffix:string = "]", baseFormat:string = "%?"): string throws {
-            if this.dimensions == 1 {
-                var s:string = "";
-                if (this.size == 0) {
-                    s =  ""; // Unnecessary, but left for clarity
-                } else if (this.size < thresh || this.size <= 6) {
-                    for i in 0..(this.size-2) {s += try! baseFormat.doFormat(this.a[i]) + " ";}
-                    s += try! baseFormat.doFormat(this.a[this.size-1]);
-                } else {
-                    var b = baseFormat + " " + baseFormat + " " + baseFormat + " ... " +
+            const summaryFmt = baseFormat + " " + baseFormat + " " + baseFormat + " ... " +
                                 baseFormat + " " + baseFormat + " " + baseFormat;
-                    s = try! b.doFormat(
-                                this.a[0], this.a[1], this.a[2],
-                                this.a[this.size-3], this.a[this.size-2], this.a[this.size-1]);
+
+            proc subArrayStr(param dim: int, idx: int ...dim): string {
+                const dimIdx = dim-1;
+                var s = "[", first = true;
+                if dim < this.dimensions {
+                    if this.tupShape[dimIdx] < thresh || this.tupShape[dimIdx] <= 6 {
+                        for i in 0..<this.tupShape[dimIdx] {
+                            if first then first = false; else s += " ";
+                            s += subArrayStr(dim+1, (...idx), i);
+                        }
+                    } else {
+                        for i in 0..<3 do
+                            s += subArrayStr(dim+1, (...idx), i) + " ";
+                        s += "... ";
+                        for i in (this.tupShape[dimIdx] - 3)..<this.tupShape[dimIdx] {
+                            if first then first = false; else s += " ";
+                            s += subArrayStr(dim+1, (...idx), i);
+                        }
+                    }
+                } else {
+                    if this.tupShape[dimIdx] < thresh || this.tupShape[dimIdx] <= 6 {
+                        for i in 0..<this.tupShape[dimIdx] {
+                            if first then first = false; else s += " ";
+                            s += try! baseFormat.format(this.a[(...subArrayIdx(idx, i))]);
+                        }
+                    } else {
+                        s += try! summaryFmt.format(
+                            this.a[subArrayIdx(idx, 0)],
+                            this.a[subArrayIdx(idx, 1)],
+                            this.a[subArrayIdx(idx, 2)],
+                            this.a[subArrayIdx(idx, this.tupShape[dimIdx]-3)],
+                            this.a[subArrayIdx(idx, this.tupShape[dimIdx]-2)],
+                            this.a[subArrayIdx(idx, this.tupShape[dimIdx]-1)]
+                        );
+                    }
                 }
-                if this.etype == bool {
-                    s = s.replace("true","True");
-                    s = s.replace("false","False");
-                }
-                return prefix + s + suffix;
-            } else {
-                return prefix + "ND array: " + this.shape + suffix;
+                s += "]";
+                return s;
             }
+
+            return subArrayStr(1, 0);
         }
+    }
+
+    // create a tuple composed of the last N-1 elements of idxBase and idx
+    private proc subArrayIdx(idxBase: ?N*int, idx: int): N*int {
+        var t: N*int;
+        for i in 1..<N do t[i-1] = idxBase[i];
+        t[N-1] = idx;
+        return t;
     }
 
     inline proc createSymEntry(shape: int ..., type etype) throws {
