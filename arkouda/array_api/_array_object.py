@@ -103,6 +103,28 @@ class Array:
         """
         return self._array.to_ndarray()
 
+    def item(self):
+        """
+        Convert the array to a Python scalar
+        """
+        return self._array[0]
+
+    def transpose(self, axes: Optional[Tuple[int, ...]] = None):
+        from ._manipulation_functions import permute_dims
+        if axes is None:
+            _axes = tuple(range(self.ndim - 1, -1, -1))
+        else:
+            if len(axes) < self.ndim:
+                _axes = tuple(range(0, self.ndim))
+                for i, j in enumerate(axes):
+                    _axes[i] = j
+            elif len(axes) == self.ndim:
+                _axes = tuple(axes)
+            else:
+                raise ValueError("number of axes don't match array dimensions")
+
+        return permute_dims(self, _axes)
+
     # These functions are not required by the spec, but are implemented for
     # the sake of usability.
 
@@ -127,7 +149,7 @@ class Array:
         will be present in other implementations.
 
         """
-        return ak.asarray(self._array, dtype=dtype)
+        return np.asarray(self.to_ndarray(), dtype=dtype)
 
     # These are various helper functions to make the array behavior match the
     # spec in places where it either deviates from or is more strict than
