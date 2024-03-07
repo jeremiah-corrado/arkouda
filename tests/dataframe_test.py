@@ -363,6 +363,10 @@ class DataFrameTest(ArkoudaTest):
         self.assertListEqual(df_reset.index.to_list(), [0, 1, 2])
         self.assertListEqual(slice_df.index.to_list(), [1, 3, 5])
 
+        df_reset2 = slice_df.reset_index(size=3)
+        self.assertListEqual(df_reset2.index.to_list(), [0, 1, 2])
+        self.assertListEqual(slice_df.index.to_list(), [1, 3, 5])
+
         slice_df.reset_index(inplace=True)
         self.assertListEqual(slice_df.index.to_list(), [0, 1, 2])
 
@@ -942,6 +946,18 @@ class DataFrameTest(ArkoudaTest):
         test_df = df.isin(other_df)
         self.assertListEqual(test_df["col_A"].to_list(), [True, True])
         self.assertListEqual(test_df["col_B"].to_list(), [False, False])
+
+    def test_corr(self):
+        df = ak.DataFrame({'col1': [1, 2], 'col2': [-1, -2]})
+        corr = df.corr()
+        pd_corr = df.to_pandas().corr()
+        assert_frame_equal(corr.to_pandas(retain_index=True), pd_corr)
+
+        for i in range(5):
+            df = ak.DataFrame({'col1': ak.randint(0, 10, 10), 'col2': ak.randint(0, 10, 10)})
+            corr = df.corr()
+            pd_corr = df.to_pandas().corr()
+            assert_frame_equal(corr.to_pandas(retain_index=True), pd_corr)
 
     def test_multiindex_compat(self):
         # Added for testing Issue #1505

@@ -1611,7 +1611,7 @@ class DataFrame(UserDict):
             )
 
     @typechecked
-    def reset_index(self, size: bool = False, inplace: bool = False) -> Union[None, DataFrame]:
+    def reset_index(self, size: int = None, inplace: bool = False) -> Union[None, DataFrame]:
         """
         Set the index to an integer range.
 
@@ -3937,13 +3937,13 @@ class DataFrame(UserDict):
 
         >>> corr = df.corr()
 
-        +----+--------+--------+
-        |    |   col1 |   col2 |
-        +====+========+========+
-        |  0 |      1 |     -1 |
-        +----+--------+--------+
-        |  1 |     -1 |      1 |
-        +----+--------+--------+
+        +------+--------+--------+
+        |      |   col1 |   col2 |
+        +======+========+========+
+        | col1 |      1 |     -1 |
+        +------+--------+--------+
+        | col2 |     -1 |      1 |
+        +------+--------+--------+
 
         """
 
@@ -3959,7 +3959,10 @@ class DataFrame(UserDict):
         }
 
         ret_dict = json.loads(generic_msg(cmd="corrMatrix", args=args))
-        return DataFrame({c: create_pdarray(ret_dict[c]) for c in self.columns.values})
+        return DataFrame(
+            {c: create_pdarray(ret_dict[c]) for c in self.columns.values},
+            index=array(self.columns.values),
+        )
 
     @typechecked
     def merge(
@@ -4333,7 +4336,7 @@ class DataFrame(UserDict):
 
     @staticmethod
     @typechecked
-    def unregister_dataframe_by_name(user_defined_name: str) -> None:
+    def unregister_dataframe_by_name(user_defined_name: str) -> str:
         """
         Function to unregister DataFrame object by name which was registered
         with the arkouda server via register().
@@ -4368,7 +4371,6 @@ class DataFrame(UserDict):
         >>> df.unregister_dataframe_by_name("my_table_name")
         >>> df.is_registered()
         False
-
 
         """
         import warnings
