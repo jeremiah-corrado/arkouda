@@ -600,7 +600,7 @@ module ManipulationMsg {
 
     proc init(shape: ?N*int) {
       this.rank = N;
-      const sizes = [i in 0..<N by -1] do shape[i];
+      const sizes = [i in 0..<N by -1] shape[i];
       this.accumRankSizes = * scan sizes / sizes;
     }
 
