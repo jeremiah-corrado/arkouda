@@ -551,29 +551,24 @@ module ManipulationMsg {
 
     proc doReshape(type t): MsgTuple throws {
       const eIn = toSymEntry(gEnt, t, ndIn),
-            (valid, shape) = validateShape(rawShape, eIn.a.size);
+            (valid, outShape) = validateShape(rawShape, eIn.a.size);
 
       if !valid {
         const errMsg = "Cannot reshape array of shape %? into shape %?. The total number of elements must match".doFormat(eIn.tupShape, rawShape);
         mLogger.error(getModuleName(),pn,getLineNumber(),errMsg);
         return new MsgTuple(errMsg,MsgType.ERROR);
       } else {
-        var eOut = st.addEntry(rname, (...shape), t);
-
-        const sizes = [i in 0..<ndOut by -1] eOut.tupShape[i],
-              accumSizes = * scan sizes / sizes;
-
-        // index -> order for the output array's indices
-        // e.g., order = k + (nz * j) + (nz * ny * i)
-        inline proc indexToOrder(idx: ndOut*int): int {
-          var order = 0;
-          for param i in 0..<ndOut do order += idx[i] * accumSizes[i];
-          return order;
-        }
+        var eOut = st.addEntry(rname, (...outShape), t);
 
         // copy the data from the input array to the output array while reshaping
-        forall idx in eOut.a.domain with (var agg = newSrcAggregator(t)) {
-          const inIdx = eIn.a.domain.orderToIndex(indexToOrder(if ndOut==1 then (idx,) else idx));
+        forall idx in eOut.a.domain with (
+          var agg = newSrcAggregator(t),
+          const indexer = new inIndexer(ndIn, eIn.a.domain),
+          const orderer = new outOrderer(outShape)
+        ) {
+          const inIdx = indexer.orderToIndex(orderer.indexToOrder(
+            if ndOut == 1 then (idx,) else idx // TODO: open bug report about var-args not being an option here
+          ));
           agg.copy(eOut.a[idx], eIn.a[inIdx]);
         }
 
@@ -595,6 +590,37 @@ module ManipulationMsg {
         return new MsgTuple(errorMsg,MsgType.ERROR);
       }
     }
+  }
+
+  // helper for computing the order of an index in the output array in the reshape loop above
+  record outOrderer {
+    param rank: int;
+    const accumRankSizes: [0..<rank] int;
+
+    proc init(shape: ?N*int) {
+      this.rank = N;
+      const sizes = for i in 0..<N by -1 do shape[i];
+      this.accumRankSizes = * scan sizes / sizes;
+    }
+
+    inline proc indexToOrder(idx: rank*int): int {
+      var order = 0;
+      for param i in 0..<rank do order += idx[i] * accumRankSizes[i];
+      return order;
+    }
+  }
+
+  // wrapper around a domain for reduced communication in the reshape loop above
+  record inIndexer {
+    param rank: int;
+    const localDom: domain(rank=rank, idxType=int, strides=strideKind.one);
+
+    proc init(param rank: int, in dom) {
+      this.rank = rank;
+      this.localDom = dom;
+    }
+
+    inline proc orderToIndex(order: int) do return localDom.orderToIndex(order);
   }
 
   // ensures that the shape either:
