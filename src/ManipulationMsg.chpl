@@ -567,11 +567,9 @@ module ManipulationMsg {
           const indexer = new inIndexer(ndIn, eIn.a.domain),
           const orderer = new outOrderer(outShape)
         ) {
-          const inIdx = indexer.orderToIndex(
-            orderer.indexToOrder(
-              if ndOut == 1 then (idx,) else idx // TODO: open bug report about var-args not being an option here
-            )
-          );
+          const inIdx = indexer.orderToIndex(orderer.indexToOrder(
+            if ndOut == 1 then (idx,) else idx // TODO: open bug report about var-args not being an option here
+          ));
           agg.copy(eOut.a[idx], eIn.a[inIdx]);
         }
 
@@ -602,19 +600,15 @@ module ManipulationMsg {
 
     proc init(shape: ?N*int) {
       this.rank = N;
-      const sizesRev = [i in 0..<N] shape[i];
-
+      const sizesRev = [i in 0..<N] shape[N - i - 1];
       this.accumRankSizes = * scan sizesRev / sizesRev;
-      init this;
-      writeln("orderer: ", shape, " -> ", accumRankSizes, "\t(", sizesRev, ", ", accumRankSizes.domain, ")");
     }
 
     // index -> order for the output array's indices
     // e.g., order = k + (nz * j) + (nz * ny * i)
     inline proc indexToOrder(idx: rank*int): int {
       var order = 0;
-      for param i in 0..<this.rank do order += idx[i] * this.accumRankSizes[i];
-      writeln("\tindexToOrder: ", idx, " -> ", order);
+      for param i in 0..<this.rank do order += idx[i] * this.accumRankSizes[rank - i - 1];
       return order;
     }
   }
