@@ -561,6 +561,7 @@ module ManipulationMsg {
         var eOut = st.addEntry(rname, (...outShape), t);
 
         // copy the data from the input array to the output array while reshaping
+        // TODO: translate this loop to use a DstAggregator to take advantage of non-blocking puts
         forall idx in eOut.a.domain with (
           var agg = newSrcAggregator(t),
           const indexer = new inIndexer(ndIn, eIn.a.domain),
@@ -599,11 +600,12 @@ module ManipulationMsg {
 
     proc init(shape: ?N*int) {
       this.rank = N;
-      const sizes = for i in 0..<N by -1 do shape[i];
+      const sizes = [i in 0..<N by -1] do shape[i];
       this.accumRankSizes = * scan sizes / sizes;
     }
 
     inline proc indexToOrder(idx: rank*int): int {
+      // e.g., order = k + (nz * j) + (nz * ny * i)
       var order = 0;
       for param i in 0..<rank do order += idx[i] * accumRankSizes[i];
       return order;
