@@ -38,10 +38,10 @@ module ArrayApiSpecial {
     }
 
     select gEnt.dtype {
-      when DType.Int64 do return clipArray(int, minVal, maxVal);
-      when DType.UInt64 do return clipArray(uint, minVal, maxVal);
-      when DType.Float64 do return clipArray(real, minVal, maxVal);
-      when DType.Bool do return clipArray(bool, minVal, maxVal);
+      when DType.Int64 do return clipArray(int);
+      when DType.UInt64 do return clipArray(uint);
+      when DType.Float64 do return clipArray(real);
+      when DType.Bool do return clipArray(bool);
       otherwise {
         var errorMsg = notImplementedError(pn,dtype2str(gEnt.dtype));
         aLogger.error(getModuleName(),pn,getLineNumber(),errorMsg);

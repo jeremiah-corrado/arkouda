@@ -8,6 +8,7 @@ module ManipulationMsg {
   use Logging;
   use ServerErrorStrings;
   use CommAggregation;
+  use ArkoudaAryUtilCompat;
 
   use Reflection;
   use BigInteger;
@@ -42,7 +43,6 @@ module ManipulationMsg {
     aware that promotion of singleton dimensions may be necessary. E.g.,
     make matrix multiplication aware that it can treat a singleton
     value as a vector of the appropriate length during multiplication.
-
     (this may require a modification of SymEntry to keep track of
     which dimensions are explicitly singletons)
 
@@ -86,18 +86,17 @@ module ManipulationMsg {
           mLogger.error(getModuleName(),getRoutineName(),getLineNumber(),errorMsg);
           return new MsgTuple(errorMsg, MsgType.ERROR);
         } else {
-          // define a mapping from the output array's indices to the input array's indices
-          inline proc imap(idx: int ...ndOut): ndIn*int {
-            var ret: ndIn*int;
-            for param i in 0..<ndIn do
-              ret[i] = if bcDims[i] then 0 else idx[i];
-            return ret;
-          }
+          // copy elements of the input array into slices of the output array in parallel
+          forall outSliceIdx in domOffAxis(eOut.a.domain, bcDims) with (in bcDims) {
+            const outSliceIdxT = if ndOut == 1 then (outSliceIdx,) else outSliceIdx,
+                  outSliceDom = domOnAxis(eOut.a.domain, outSliceIdxT, bcDims);
 
-          forall idx in eOut.a.domain with (var agg = newSrcAggregator(t)) do
-            if ndOut == 1
-              then eOut.a[idx] = eIn.a[imap(idx)];
-              else eOut.a[idx] = eIn.a[imap((...idx))];
+            var inSliceIdx: ndIn*int;
+            for param i in 0..<ndIn do
+              inSliceIdx[i] = if bcDims[i] then 0 else outSliceIdxT[i];
+
+            eOut.a[outSliceDom] = eIn.a[inSliceIdx];
+          }
         }
       }
 
@@ -561,16 +560,13 @@ module ManipulationMsg {
         var eOut = st.addEntry(rname, (...outShape), t);
 
         // copy the data from the input array to the output array while reshaping
-        // TODO: translate this loop to use a DstAggregator to take advantage of non-blocking puts
-        forall idx in eOut.a.domain with (
-          var agg = newSrcAggregator(t),
-          const indexer = new inIndexer(ndIn, eIn.a.domain),
-          const orderer = new outOrderer(outShape)
+        forall idx in eIn.a.domain with (
+          var agg = newDstAggregator(t),
+          const output = new indexer(ndOut, eOut.a.domain),
+          const input = new orderer(eIn.tupShape)
         ) {
-          const inIdx = indexer.orderToIndex(orderer.indexToOrder(
-            if ndOut == 1 then (idx,) else idx // TODO: open bug report about var-args not being an option here
-          ));
-          agg.copy(eOut.a[idx], eIn.a[inIdx]);
+          const outIdx = output.orderToIndex(input.indexToOrder(if ndIn == 1 then (idx,) else idx));
+          agg.copy(eOut.a[outIdx], eIn.a[idx]);
         }
 
         const repMsg = "created " + st.attrib(rname);
@@ -593,28 +589,28 @@ module ManipulationMsg {
     }
   }
 
-  // helper for computing the order of an index in the output array in the reshape loop above
-  record outOrderer {
+  // helper for computing the order of an index in the input array in the reshape loop above
+  record orderer {
     param rank: int;
     const accumRankSizes: [0..<rank] int;
 
     proc init(shape: ?N*int) {
-      this.rank = N;
+      rank = N;
       const sizesRev = [i in 0..<N] shape[N - i - 1];
-      this.accumRankSizes = * scan sizesRev / sizesRev;
+      accumRankSizes = * scan sizesRev / sizesRev;
     }
 
-    // index -> order for the output array's indices
+    // index -> order for the input array's indices
     // e.g., order = k + (nz * j) + (nz * ny * i)
     inline proc indexToOrder(idx: rank*int): int {
       var order = 0;
-      for param i in 0..<this.rank do order += idx[i] * this.accumRankSizes[rank - i - 1];
+      for param i in 0..<rank do order += idx[i] * accumRankSizes[rank - i - 1];
       return order;
     }
   }
 
   // wrapper around a domain for reduced communication in the reshape loop above
-  record inIndexer {
+  record indexer {
     param rank: int;
     const localDom: domain(rank=rank, idxType=int, strides=strideKind.one);
 

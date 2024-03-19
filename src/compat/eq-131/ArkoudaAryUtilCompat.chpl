@@ -43,6 +43,14 @@ module ArkoudaAryUtilCompat {
     return D[{(...outDims)}];
   }
 
+  proc domOnAxis(D: domain, idx: D.rank*int, axes: D.rank*bool) {
+    var outDims: D.rank*range;
+    for param i in 0..<D.rank {
+      outDims[i] = if axes[i] then d.dim(i) else idx[i]..idx[i];
+    }
+    return D[{(...outDims)}];
+  }
+
   /*
     Get a domain over the set of indices orthogonal to the specified axes
 
@@ -82,6 +90,14 @@ module ArkoudaAryUtilCompat {
         }
       }
       outDims[i] = D.dim(i);
+    }
+    return D[{(...outDims)}];
+  }
+
+  proc domOffAxis(D: domain, axes: D.rank*bool) {
+    var outDims: D.rank*range;
+    for param i in 0..<D.rank {
+      outDims[i] = if axes[i] then 0..0 else D.dim(i);
     }
     return D[{(...outDims)}];
   }
