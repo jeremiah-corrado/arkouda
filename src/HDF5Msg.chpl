@@ -3043,10 +3043,10 @@ module HDF5Msg {
      *  Get the subdomains of the distributed array represented by each file, 
      *  as well as the total length of the array. 
      */
-    proc get_subdoms(filenames: [?FD] string, dsetName: string, validFiles: [] bool) throws {
+    proc get_subdoms(filenames: [?FD] string, dsetName: string, validFiles: [] bool, param nd: int) throws {
         use CTypes;
 
-        var lengths: [FD] int;
+        var shapes: [FD] domain(nd);
         var skips = new set(string); // Case where there is no data in the file for this dsetName
         for (i, filename, isValid) in zip(FD, filenames, validFiles) {
             try {
@@ -3063,16 +3063,20 @@ module HDF5Msg {
                     C_HDF5.H5Fclose(file_id);
                 }
 
-                var dims: [0..#1] C_HDF5.hsize_t; // Only rank 1 for now
+                var dims: [0..#nd] C_HDF5.hsize_t;
 
-                // Read array length into dims[0]
-                C_HDF5.HDF5_WAR.H5LTget_dataset_info_WAR(file_id, dsetName.c_str(), 
+                // Read array shape into dims
+                C_HDF5.HDF5_WAR.H5LTget_dataset_info_WAR(file_id, dsetName.c_str(),
                                            c_ptrTo(dims), nil, nil);
-                lengths[i] = dims[0]: int;
-                if lengths[i] == 0 {
+
+                var rngs: nd*range;
+                for rank in 0..<nd do rngs[rank] = 0..<(dims[rank]:int);
+                shapes[i] = {(...rngs)};
+
+                if shapes.size == 0 {
                     skips.add(filename);
                     h5Logger.debug(getModuleName(),getRoutineName(),getLineNumber(),
-                        "Adding filename:%s to skips, dsetName:%s, dims[0]:%?".doFormat(filename, dsetName, dims[0]));
+                        "Adding filename:%s to skips, dsetName:%s, dims:%?".doFormat(filename, dsetName, dims));
                 }
 
             } catch e: Error {
@@ -3086,21 +3090,24 @@ module HDF5Msg {
             }
         }
         // Compute subdomain of master array contained in each file
-        var subdoms: [FD] domain(1);
-        var offset = 0;
+        var offsets: nd*int,
+            subdoms: [FD] domain(nd);
         for i in FD {
-            subdoms[i] = {offset..#lengths[i]};
-            offset += lengths[i];
+            var rngs: nd*range;
+            for rank in 0..<nd {
+                rngs[rank] = shapes[i].dim(rank).translate(offsets[rank]);
+                offsets[rank] += shapes[i].dim(rank).size;
+            }
         }
-        return (subdoms, (+ reduce lengths), skips);
+        return (subdoms, (+ reduce for i in FD do subdoms[i].size), skips, offsets);
     }
 
-    /* 
+    /*
         Write data from HDF5 dataset into a distributed array.
         This function gets called when A is a BlockDist or DefaultRectangular array. 
     */
-    proc read_files_into_distributed_array(A, filedomains: [?FD] domain(1), 
-                                                 filenames: [FD] string, dsetName: string, skips: set(string)) throws 
+    proc read_files_into_distributed_array(A, filedomains: [?FD] domain(nd),
+                                                 filenames: [FD] string, dsetName: string, skips: set(string), param nd: int) throws 
         where (MyDmap == Dmap.blockDist || MyDmap == Dmap.defaultRectangular)
     {
         h5Logger.debug(getModuleName(),getRoutineName(),getLineNumber(),
@@ -3112,8 +3119,8 @@ module HDF5Msg {
 
         coforall loc in A.targetLocales() do on loc {
             // Create local copies of args
-            var locFiles = filenames;
-            var locFiledoms = filedomains;
+            const locFiles = filenames;
+            const locFiledoms = filedomains;
             /* On this locale, find all files containing data that belongs in
                 this locale's chunk of A */
             for (filedom, filename) in zip(locFiledoms, locFiles) {
@@ -3126,7 +3133,7 @@ module HDF5Msg {
                             "File %s does not contain data for this dataset, skipping".doFormat(filename));
                 } else {
                     // Look for overlap between A's local subdomain and this file
-                    const intersection = domain_intersection(A.localSubdomain(), filedom);
+                    const intersection = filedom[A.localSubdomain()];
                     if intersection.size > 0 {
                         // Only open the file once, even if it intersects with many local subdomains
                         if !isopen {
@@ -3135,35 +3142,61 @@ module HDF5Msg {
                             try! dataset = C_HDF5.H5Dopen(file_id, dsetName.localize().c_str(), C_HDF5.H5P_DEFAULT);
                             isopen = true;
                         }
-                        // do A[intersection] = file[intersection - offset]
-                        var dataspace = C_HDF5.H5Dget_space(dataset);
-                        var dsetOffset = (intersection.low - filedom.low): C_HDF5.hsize_t;
-                        var dsetStride = intersection.stride: C_HDF5.hsize_t;
-                        var dsetCount = intersection.size: C_HDF5.hsize_t;
-                        C_HDF5.H5Sselect_hyperslab(dataspace, C_HDF5.H5S_SELECT_SET, c_ptrTo(dsetOffset), 
-                                                        c_ptrTo(dsetStride), c_ptrTo(dsetCount), nil);
-                        var memOffset = 0: C_HDF5.hsize_t;
-                        var memStride = 1: C_HDF5.hsize_t;
-                        var memCount = intersection.size: C_HDF5.hsize_t;
-                        var memspace = C_HDF5.H5Screate_simple(1, c_ptrTo(memCount), nil);
-                        C_HDF5.H5Sselect_hyperslab(memspace, C_HDF5.H5S_SELECT_SET, c_ptrTo(memOffset), 
-                                                        c_ptrTo(memStride), c_ptrTo(memCount), nil);
 
-                        h5Logger.debug(getModuleName(),getRoutineName(),getLineNumber(),
-                                "Locale %? intersection %? dataset slice %?".doFormat(loc,intersection,
-                                (intersection.low - filedom.low, intersection.high - filedom.low)));
 
-                        /*
-                        * The fact that intersection is a subset of a local subdomain means
-                        * there should be no communication in the read
-                        */
-                        local {
-                            C_HDF5.H5Dread(dataset, getHDF5Type(A.eltType), memspace, 
-                                    dataspace, C_HDF5.H5P_DEFAULT, 
-                                    c_ptrTo(A.localSlice(intersection)));
+                        if nd == 1 {
+                            // do A[intersection] = file[intersection - offset]
+                            var dataspace = C_HDF5.H5Dget_space(dataset);
+                            var dsetOffset = (intersection.low - filedom.low): C_HDF5.hsize_t;
+                            var dsetStride = intersection.stride: C_HDF5.hsize_t;
+                            var dsetCount = intersection.size: C_HDF5.hsize_t;
+                            C_HDF5.H5Sselect_hyperslab(dataspace, C_HDF5.H5S_SELECT_SET, c_ptrTo(dsetOffset), 
+                                                            c_ptrTo(dsetStride), c_ptrTo(dsetCount), nil);
+                            var memOffset = 0: C_HDF5.hsize_t;
+                            var memStride = 1: C_HDF5.hsize_t;
+                            var memCount = intersection.size: C_HDF5.hsize_t;
+                            var memspace = C_HDF5.H5Screate_simple(1, c_ptrTo(memCount), nil);
+                            C_HDF5.H5Sselect_hyperslab(memspace, C_HDF5.H5S_SELECT_SET, c_ptrTo(memOffset), 
+                                                            c_ptrTo(memStride), c_ptrTo(memCount), nil);
+
+                            h5Logger.debug(getModuleName(),getRoutineName(),getLineNumber(),
+                                    "Locale %? intersection %? dataset slice %?".doFormat(loc,intersection,
+                                    (intersection.low - filedom.low, intersection.high - filedom.low)));
+
+                            /*
+                            * The fact that intersection is a subset of a local subdomain means
+                            * there should be no communication in the read
+                            */
+                            local {
+                                C_HDF5.H5Dread(dataset, getHDF5Type(A.eltType), memspace, 
+                                        dataspace, C_HDF5.H5P_DEFAULT, 
+                                        c_ptrTo(A.localSlice(intersection)));
+                            }
+                            C_HDF5.H5Sclose(memspace);
+                            C_HDF5.H5Sclose(dataspace);
+                        } else {
+                            var strides = for 0..<nd do 1:C_HDF5.hsize_t,
+                                counts = strides, // only 1 block for the whole intersection
+                                blockSizes = [i in 0..<nd] intersection.dim(i).size:C_HDF5.hsize_t;
+
+                            var dataspace = C_HDF5.H5Dget_space(dataset);
+                            var dsetOffset = [i in 0..<nd] (intersection.dim(i).low - filedom.dim(i).low):C_HDF5.hsize_t;
+                            C_HDF5.H5Sselect_hyperslab(dataspace, C_HDF5.H5S_SELECT_SET, c_ptrTo(dsetOffset),
+                                                            c_ptrTo(strides), c_ptrTo(counts), c_ptrTo(blockSizes));
+
+                            var memspace = C_HDF5.H5Screate_simple(nd, c_ptrTo(blockSizes), nil);
+                            var memOffset = for 0..<nd do 0:C_HDF5.hsize_t;
+                            C_HDF5.H5Sselect_hyperslab(memspace, C_HDF5.H5S_SELECT_SET, c_ptrTo(memOffset),
+                                                            c_ptrTo(strides), c_ptrTo(counts), c_ptrTo(blockSizes));
+
+                            local {
+                                C_HDF5.H5Dread(dataset, getHDF5Type(A.eltType), memspace,
+                                        dataspace, C_HDF5.H5P_DEFAULT,
+                                        c_ptrTo(A.localSlice(intersection)));
+                            }
+                            C_HDF5.H5Sclose(memspace);
+                            C_HDF5.H5Sclose(dataspace);
                         }
-                        C_HDF5.H5Sclose(memspace);
-                        C_HDF5.H5Sclose(dataspace);
                     }
                 }
                 if isopen {
@@ -3339,7 +3372,7 @@ module HDF5Msg {
         
         var sname = st.nextName();
         st.addEntry(sname, createSymEntry(shape));
-        var rname = readPdarrayFromFile(filenames, dset, dataclass, bytesize, isSigned, validFiles, st);
+        var rname = readPdarrayFromFile(filenames, dset, dataclass, bytesize, isSigned, validFiles, st, 1);
         return (dset, ObjType.ARRAYVIEW, "%s+%s".doFormat(rname, sname));
     }
 
@@ -3386,9 +3419,9 @@ module HDF5Msg {
             var subdoms: [fD] domain(1);
             var skips = new set(string);
             var len: int;
-            (subdoms, len, skips) = get_subdoms(filenames, "%s/Limb_%i".doFormat(dset, l), validFiles);
+            (subdoms, len, skips, _) = get_subdoms(filenames, "%s/Limb_%i".doFormat(dset, l), validFiles, 1);
             var limb = createSymEntry(len, uint);
-            read_files_into_distributed_array(limb.a, subdoms, filenames, "%s/Limb_%i".doFormat(dset, l), skips);
+            read_files_into_distributed_array(limb.a, subdoms, filenames, "%s/Limb_%i".doFormat(dset, l), skips, 1);
             limbs.pushBack(limb);
         }
 
@@ -3420,28 +3453,29 @@ module HDF5Msg {
     /*
         Read an pdarray object from the files provided into a distributed array
     */
-    proc readPdarrayFromFile(filenames: [?fD] string, dset: string, dataclass, bytesize: int, isSigned: bool, ref validFiles: [] bool, st: borrowed SymTab): string throws {
+    proc readPdarrayFromFile(filenames: [?fD] string, dset: string, dataclass, bytesize: int, isSigned: bool, ref validFiles: [] bool, st: borrowed SymTab, param nd: int): string throws {
         // identify the index of the first valid file
         var (v, idx) = maxloc reduce zip(validFiles, validFiles.domain);
 
         if isBigIntPdarray(filenames[idx], dset) {
             return readBigIntPdarrayFromFile(filenames, dset, dataclass, bytesize, isSigned, validFiles, st);
         }
-        
+
         var rname: string;
-        var subdoms: [fD] domain(1);
+        var subdoms: [fD] domain(nd);
         var skips = new set(string);
         var len: int;
-        (subdoms, len, skips) = get_subdoms(filenames, dset, validFiles);
+        var shape: nd*int;
+        (subdoms, len, skips, shape) = get_subdoms(filenames, dset, validFiles, nd);
         select dataclass {
             when C_HDF5.H5T_INTEGER {
                 if (!isSigned && 8 == bytesize) {
-                    var entryUInt = createSymEntry(len, uint);
+                    var entryUInt = createSymEntry((...shape), uint);
                     h5Logger.debug(getModuleName(),getRoutineName(),getLineNumber(), "Initialized uint entry for dataset %s".doFormat(dset));
-                    read_files_into_distributed_array(entryUInt.a, subdoms, filenames, dset, skips);
+                    read_files_into_distributed_array(entryUInt.a, subdoms, filenames, dset, skips, nd);
                     rname = st.nextName();
                     if isBoolDataset(filenames[idx], dset) {
-                        var entryBool = createSymEntry(len, bool);
+                        var entryBool = createSymEntry((...shape), bool);
                         entryBool.a = entryUInt.a:bool;
                         st.addEntry(rname, entryBool);
                     } else {
@@ -3450,12 +3484,12 @@ module HDF5Msg {
                     }
                 }
                 else {
-                    var entryInt = createSymEntry(len, int);
+                    var entryInt = createSymEntry((...shape), int);
                     h5Logger.debug(getModuleName(),getRoutineName(),getLineNumber(), "Initialized int entry for dataset %s".doFormat(dset));
-                    read_files_into_distributed_array(entryInt.a, subdoms, filenames, dset, skips);
+                    read_files_into_distributed_array(entryInt.a, subdoms, filenames, dset, skips, nd);
                     rname = st.nextName();
                     if isBoolDataset(filenames[idx], dset) {
-                        var entryBool = createSymEntry(len, bool);
+                        var entryBool = createSymEntry((...shape), bool);
                         entryBool.a = entryInt.a:bool;
                         st.addEntry(rname, entryBool);
                     } else {
@@ -3465,10 +3499,10 @@ module HDF5Msg {
                 }
             }
             when C_HDF5.H5T_FLOAT {
-                var entryReal = createSymEntry(len, real);
+                var entryReal = createSymEntry((...shape), real);
                 h5Logger.debug(getModuleName(),getRoutineName(),getLineNumber(),
                                                                     "Initialized float entry");
-                read_files_into_distributed_array(entryReal.a, subdoms, filenames, dset, skips);
+                read_files_into_distributed_array(entryReal.a, subdoms, filenames, dset, skips, nd);
                 rname = st.nextName();
                 st.addEntry(rname, entryReal);
             }
@@ -3487,8 +3521,8 @@ module HDF5Msg {
         return rname;
     }
 
-    proc pdarray_readhdfMsg(filenames: [?fD] string, dset: string, dataclass, bytesize: int, isSigned: bool, ref validFiles: [] bool, st: borrowed SymTab): (string, ObjType, string) throws {
-        var pda_name = readPdarrayFromFile(filenames, dset, dataclass, bytesize, isSigned, validFiles, st);
+    proc pdarray_readhdfMsg(filenames: [?fD] string, dset: string, dataclass, bytesize: int, isSigned: bool, ref validFiles: [] bool, st: borrowed SymTab, param nd: int): (string, ObjType, string) throws {
+        var pda_name = readPdarrayFromFile(filenames, dset, dataclass, bytesize, isSigned, validFiles, st, nd);
         var (v, idx) = maxloc reduce zip(validFiles, validFiles.domain);
         var file_id = C_HDF5.H5Fopen(filenames[idx].c_str(), C_HDF5.H5F_ACC_RDONLY, C_HDF5.H5P_DEFAULT);
         var objType = getObjType(file_id, dset);
@@ -3506,9 +3540,9 @@ module HDF5Msg {
         var len: int;
         var nSeg: int;
         if (!calcStringOffsets) {
-            (segSubdoms, nSeg, skips) = get_subdoms(filenames, dset + "/" + SEGMENTED_OFFSET_NAME, validFiles);
+            (segSubdoms, nSeg, skips, _) = get_subdoms(filenames, dset + "/" + SEGMENTED_OFFSET_NAME, validFiles, 1);
         }
-        (subdoms, len, skips) = get_subdoms(filenames, dset + "/" + SEGMENTED_VALUE_NAME, validFiles);
+        (subdoms, len, skips, _) = get_subdoms(filenames, dset + "/" + SEGMENTED_VALUE_NAME, validFiles, 1);
 
         if (bytesize != 1) || isSigned {
             var errorMsg = "Error: detected unhandled datatype: objType? SegString, class %i, size %i, signed? %?".doFormat(
@@ -3524,7 +3558,7 @@ module HDF5Msg {
 
         // Load the strings bytes/values first
         var entryVal = createSymEntry(len, uint(8));
-        read_files_into_distributed_array(entryVal.a, subdoms, filenames, dset + "/" + SEGMENTED_VALUE_NAME, skips);
+        read_files_into_distributed_array(entryVal.a, subdoms, filenames, dset + "/" + SEGMENTED_VALUE_NAME, skips, 1);
 
         proc buildEntryCalcOffsets() throws {
             var offsetsArray = segmentedCalcOffsets(entryVal.a, entryVal.a.domain);
@@ -3533,7 +3567,7 @@ module HDF5Msg {
 
         proc buildEntryLoadOffsets() throws {
             var offsetsEntry = createSymEntry(nSeg, int);
-            read_files_into_distributed_array(offsetsEntry.a, segSubdoms, filenames, dset + "/" + SEGMENTED_OFFSET_NAME, skips);
+            read_files_into_distributed_array(offsetsEntry.a, segSubdoms, filenames, dset + "/" + SEGMENTED_OFFSET_NAME, skips, 1);
             fixupSegBoundaries(offsetsEntry.a, segSubdoms, subdoms);
             return offsetsEntry;
         }
@@ -3562,24 +3596,24 @@ module HDF5Msg {
         var first_file = filenames[idx];
 
         if isStringsObject(first_file, "%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME)) {
-            (valSubdoms, len, vskips) = get_subdoms(filenames, "%s/%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME, SEGMENTED_OFFSET_NAME), validFiles);
+            (valSubdoms, len, vskips, _) = get_subdoms(filenames, "%s/%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME, SEGMENTED_OFFSET_NAME), validFiles, 1);
             var stringsEntry = readStringsFromFile(filenames, "%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME), dataclass, bytesize, isSigned, calcStringOffsets, validFiles, st);
             rtnMap.add("values", "created %s+created bytes.size %?".doFormat(st.attrib(stringsEntry.name), stringsEntry.nBytes));
         }
         else {
             if isBigIntPdarray(first_file, "%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME)) {
-                (valSubdoms, len, vskips) = get_subdoms(filenames, "%s/%s/Limb_0".doFormat(dset, SEGMENTED_VALUE_NAME), validFiles);
+                (valSubdoms, len, vskips, _) = get_subdoms(filenames, "%s/%s/Limb_0".doFormat(dset, SEGMENTED_VALUE_NAME), validFiles, 1);
             }
             else {
-                (valSubdoms, len, vskips) = get_subdoms(filenames, "%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME), validFiles);
+                (valSubdoms, len, vskips, _) = get_subdoms(filenames, "%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME), validFiles, 1);
             }
-            var vname = readPdarrayFromFile(filenames, "%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME), dataclass, bytesize, isSigned, validFiles, st);
+            var vname = readPdarrayFromFile(filenames, "%s/%s".doFormat(dset, SEGMENTED_VALUE_NAME), dataclass, bytesize, isSigned, validFiles, st, 1);
             rtnMap.add("values", "created " + st.attrib(vname));
         }
 
-        (segSubdoms, nSeg, skips) = get_subdoms(filenames, dset + "/" + SEGMENTED_OFFSET_NAME, validFiles);
+        (segSubdoms, nSeg, skips, _) = get_subdoms(filenames, dset + "/" + SEGMENTED_OFFSET_NAME, validFiles, 1);
         var segDist = makeDistArray(nSeg, int);
-        read_files_into_distributed_array(segDist, segSubdoms, filenames, dset + "/" + SEGMENTED_OFFSET_NAME, skips);
+        read_files_into_distributed_array(segDist, segSubdoms, filenames, dset + "/" + SEGMENTED_OFFSET_NAME, skips, 1);
         fixupSegBoundaries(segDist, segSubdoms, valSubdoms);
         var sname = st.nextName();
         st.addEntry(sname, createSymEntry(segDist));
@@ -3599,10 +3633,10 @@ module HDF5Msg {
         var subdoms: [fD] domain(1);
         var skips = new set(string);
         var len: int;
-        (subdoms, len, skips) = get_subdoms(filenames, "%s/%s".doFormat(dset, CODES_NAME), validFiles);
+        (subdoms, len, skips, _) = get_subdoms(filenames, "%s/%s".doFormat(dset, CODES_NAME), validFiles, 1);
         // read codes into distributed array
         var codes = makeDistArray(len, int);
-        read_files_into_distributed_array(codes, subdoms, filenames, "%s/%s".doFormat(dset, CODES_NAME), skips);
+        read_files_into_distributed_array(codes, subdoms, filenames, "%s/%s".doFormat(dset, CODES_NAME), skips, 1);
         // create symEntry
         var codesName = st.nextName();
         var codesEntry = createSymEntry(codes);
@@ -3616,10 +3650,10 @@ module HDF5Msg {
         var nacodes_subdoms: [fD] domain(1);
         var nacodes_skips = new set(string);
         var nacodes_len: int;
-        (nacodes_subdoms, nacodes_len, nacodes_skips) = get_subdoms(filenames, "%s/%s".doFormat(dset, NACODES_NAME), validFiles);
+        (nacodes_subdoms, nacodes_len, nacodes_skips, _) = get_subdoms(filenames, "%s/%s".doFormat(dset, NACODES_NAME), validFiles, 1);
         // read codes into distributed array
         var naCodes = makeDistArray(nacodes_len, int);
-        read_files_into_distributed_array(naCodes, nacodes_subdoms, filenames, "%s/%s".doFormat(dset, NACODES_NAME), nacodes_skips);
+        read_files_into_distributed_array(naCodes, nacodes_subdoms, filenames, "%s/%s".doFormat(dset, NACODES_NAME), nacodes_skips, 1);
         // create symEntry
         var naCodesName = st.nextName();
         var naCodesEntry = createSymEntry(naCodes);
@@ -3640,10 +3674,10 @@ module HDF5Msg {
             var segs_subdoms: [fD] domain(1);
             var segs_skips = new set(string);
             var segs_len: int;
-            (segs_subdoms, segs_len, segs_skips) = get_subdoms(filenames, "%s/%s".doFormat(dset, SEGMENTS_NAME), validFiles);
+            (segs_subdoms, segs_len, segs_skips, _) = get_subdoms(filenames, "%s/%s".doFormat(dset, SEGMENTS_NAME), validFiles, 1);
             // read segments into distributed array
             var segments = makeDistArray(segs_len, int);
-            read_files_into_distributed_array(segments, segs_subdoms, filenames, "%s/%s".doFormat(dset, SEGMENTS_NAME), segs_skips);
+            read_files_into_distributed_array(segments, segs_subdoms, filenames, "%s/%s".doFormat(dset, SEGMENTS_NAME), segs_skips, 1);
             var segName = st.nextName();
             var segEntry = createSymEntry(segments);
             st.addEntry(segName, segEntry);
@@ -3652,10 +3686,10 @@ module HDF5Msg {
             var perm_subdoms: [fD] domain(1);
             var perm_skips = new set(string);
             var perm_len: int;
-            (perm_subdoms, perm_len, perm_skips) = get_subdoms(filenames, "%s/%s".doFormat(dset, PERMUTATION_NAME), validFiles);
+            (perm_subdoms, perm_len, perm_skips, _) = get_subdoms(filenames, "%s/%s".doFormat(dset, PERMUTATION_NAME), validFiles, 1);
             // read permutation into distributed array
             var perm = makeDistArray(perm_len, int);
-            read_files_into_distributed_array(perm, perm_subdoms, filenames, "%s/%s".doFormat(dset, PERMUTATION_NAME), perm_skips);
+            read_files_into_distributed_array(perm, perm_subdoms, filenames, "%s/%s".doFormat(dset, PERMUTATION_NAME), perm_skips, 1);
             var permName = st.nextName();
             var permEntry = createSymEntry(perm);
             st.addEntry(permName, permEntry);
@@ -3672,9 +3706,9 @@ module HDF5Msg {
         var perm_subdoms: [fD] domain(1);
         var perm_skips = new set(string);
         var perm_len: int;
-        (perm_subdoms, perm_len, perm_skips) = get_subdoms(filenames, "%s/%s".doFormat(dset, PERMUTATION_NAME), validFiles);
+        (perm_subdoms, perm_len, perm_skips, _) = get_subdoms(filenames, "%s/%s".doFormat(dset, PERMUTATION_NAME), validFiles, 1);
         var perm = makeDistArray(perm_len, int);
-        read_files_into_distributed_array(perm, perm_subdoms, filenames, "%s/%s".doFormat(dset, PERMUTATION_NAME), perm_skips);
+        read_files_into_distributed_array(perm, perm_subdoms, filenames, "%s/%s".doFormat(dset, PERMUTATION_NAME), perm_skips, 1);
         // create symEntry
         var permName = st.nextName();
         var permEntry = createSymEntry(perm);
@@ -3683,9 +3717,9 @@ module HDF5Msg {
         var seg_subdoms: [fD] domain(1);
         var seg_skips = new set(string);
         var seg_len: int;
-        (seg_subdoms, seg_len, seg_skips) = get_subdoms(filenames, "%s/%s".doFormat(dset, SEGMENTS_NAME), validFiles);
+        (seg_subdoms, seg_len, seg_skips, _) = get_subdoms(filenames, "%s/%s".doFormat(dset, SEGMENTS_NAME), validFiles, 1);
         var segs = makeDistArray(seg_len, int);
-        read_files_into_distributed_array(segs, seg_subdoms, filenames, "%s/%s".doFormat(dset, SEGMENTS_NAME), seg_skips);
+        read_files_into_distributed_array(segs, seg_subdoms, filenames, "%s/%s".doFormat(dset, SEGMENTS_NAME), seg_skips, 1);
         // create symEntry
         var segName = st.nextName();
         var segEntry = createSymEntry(segs);
@@ -3694,9 +3728,9 @@ module HDF5Msg {
         var uki_subdoms: [fD] domain(1);
         var uki_skips = new set(string);
         var uki_len: int;
-        (uki_subdoms, uki_len, uki_skips) = get_subdoms(filenames, "%s/%s".doFormat(dset, UKI_NAME), validFiles);
+        (uki_subdoms, uki_len, uki_skips, _) = get_subdoms(filenames, "%s/%s".doFormat(dset, UKI_NAME), validFiles, 1);
         var uki = makeDistArray(uki_len, int);
-        read_files_into_distributed_array(uki, uki_subdoms, filenames, "%s/%s".doFormat(dset, UKI_NAME), uki_skips);
+        read_files_into_distributed_array(uki, uki_subdoms, filenames, "%s/%s".doFormat(dset, UKI_NAME), uki_skips, 1);
         // create symEntry
         var ukiName = st.nextName();
         var ukiEntry = createSymEntry(uki);
@@ -3747,7 +3781,7 @@ module HDF5Msg {
             (keyObjType, dataclass, bytesize, isSigned) = get_info(filenames[0], "%s/KEY_%i".doFormat(dset, k), calcStringOffsets);
             select keyObjType {
                 when ObjType.PDARRAY {
-                    var pda_name = readPdarrayFromFile(filenames, "%s/KEY_%i".doFormat(dset, k), dataclass, bytesize, isSigned, validFiles, st);
+                    var pda_name = readPdarrayFromFile(filenames, "%s/KEY_%i".doFormat(dset, k), dataclass, bytesize, isSigned, validFiles, st, 1);
                     readCreate = "created %s".doFormat(st.attrib(pda_name));
                 }
                 when ObjType.STRINGS {
@@ -3801,7 +3835,7 @@ module HDF5Msg {
             (keyObjType, dataclass, bytesize, isSigned) = get_info(filenames[0], "%s/%s".doFormat(dset, col), calcStringOffsets);
             select keyObjType {
                 when ObjType.PDARRAY, ObjType.IPV4, ObjType.DATETIME, ObjType.TIMEDELTA {
-                    var pda_name = readPdarrayFromFile(filenames, "%s/%s".doFormat(dset, col), dataclass, bytesize, isSigned, validFiles, st);
+                    var pda_name = readPdarrayFromFile(filenames, "%s/%s".doFormat(dset, col), dataclass, bytesize, isSigned, validFiles, st, 1);
                     readCreate = "created %s".doFormat(st.attrib(pda_name));
                 }
                 when ObjType.STRINGS {
@@ -3863,7 +3897,7 @@ module HDF5Msg {
             (keyObjType, dataclass, bytesize, isSigned) = get_info(filenames[0], "%s/%s".doFormat(dset, idx), calcStringOffsets);
             select keyObjType {
                 when ObjType.PDARRAY, ObjType.IPV4, ObjType.DATETIME, ObjType.TIMEDELTA {
-                    var pda_name = readPdarrayFromFile(filenames, "%s/%s".doFormat(dset, idx), dataclass, bytesize, isSigned, validFiles, st);
+                    var pda_name = readPdarrayFromFile(filenames, "%s/%s".doFormat(dset, idx), dataclass, bytesize, isSigned, validFiles, st, 1);
                     readCreate = "created %s".doFormat(st.attrib(pda_name));
                 }
                 when ObjType.STRINGS {
@@ -4184,13 +4218,13 @@ module HDF5Msg {
         
         select objType {
             when ObjType.PDARRAY {
-                (subdoms, len, skips) = get_subdoms(filenames, dset, validFiles);
+                (subdoms, len, skips, _) = get_subdoms(filenames, dset, validFiles, 1);
             }
             when ObjType.STRINGS {
-                (subdoms, len, skips) = get_subdoms(filenames, dset + "/" + SEGMENTED_OFFSET_NAME, validFiles);
+                (subdoms, len, skips, _) = get_subdoms(filenames, dset + "/" + SEGMENTED_OFFSET_NAME, validFiles, 1);
             }
             when ObjType.SEGARRAY {
-                (subdoms, len, skips) = get_subdoms(filenames, dset + "/" + SEGMENTED_OFFSET_NAME, validFiles);
+                (subdoms, len, skips, _) = get_subdoms(filenames, dset + "/" + SEGMENTED_OFFSET_NAME, validFiles, 1);
             }
             when ObjType.ARRAYVIEW {
                 var errorMsg = "ArrayView Objects do not support tagging";
@@ -4224,7 +4258,8 @@ module HDF5Msg {
     /*
         Read HDF5 files into an Arkouda Object
     */
-    proc readAllHdfMsg(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab): MsgTuple throws {
+    @arkouda.registerND
+    proc readAllHdfMsg(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab, param nd: int): MsgTuple throws {
         var tagData: bool = msgArgs.get("tag_data").getBoolValue();
         var strictTypes: bool = msgArgs.get("strict_types").getBoolValue();
 
@@ -4304,7 +4339,7 @@ module HDF5Msg {
         var fileErrorCount:int = 0;
         var fileErrorMsg:string = "";
         const AK_META_GROUP = ARKOUDA_HDF5_FILE_METADATA_GROUP(1..ARKOUDA_HDF5_FILE_METADATA_GROUP.size-1); // strip leading slash
-        for dsetName in dsetlist do {
+        for dsetName in dsetlist {
             if dsetName == AK_META_GROUP { // Legacy code to ignore meta group. Meta data no longer in group
                 continue;
             }
@@ -4392,7 +4427,7 @@ module HDF5Msg {
                     rtnData.pushBack(arrayView_readhdfMsg(filenames, dsetName, dataclass, bytesize, isSigned, validFiles, st));
                 }
                 when ObjType.PDARRAY, ObjType.IPV4, ObjType.DATETIME, ObjType.TIMEDELTA {
-                    rtnData.pushBack(pdarray_readhdfMsg(filenames, dsetName, dataclass, bytesize, isSigned, validFiles, st));
+                    rtnData.pushBack(pdarray_readhdfMsg(filenames, dsetName, dataclass, bytesize, isSigned, validFiles, st, nd));
                 }
                 when ObjType.STRINGS {
                     rtnData.pushBack(strings_readhdfMsg(filenames, dsetName, dataclass, bytesize, isSigned, calcStringOffsets, validFiles, st));
@@ -4516,7 +4551,6 @@ module HDF5Msg {
 
     use CommandMap;
     registerFunction("lshdf", lshdfMsg, getModuleName());
-    registerFunction("readAllHdf", readAllHdfMsg, getModuleName());
     registerFunction("tohdf", tohdfMsg, getModuleName());
     registerFunction("hdffileformat", hdfFileFormatMsg, getModuleName());
 }

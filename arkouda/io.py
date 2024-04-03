@@ -738,7 +738,7 @@ def read_hdf(
         }
     else:
         rep_msg = generic_msg(
-            cmd="readAllHdf",
+            cmd="readAllHdf1D",
             args={
                 "strict_types": strict_types,
                 "dset_size": len(datasets),
