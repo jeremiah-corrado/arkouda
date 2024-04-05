@@ -3117,7 +3117,7 @@ module HDF5Msg {
         h5Logger.debug(getModuleName(),getRoutineName(),getLineNumber(),
                 "skips: %?".doFormat(skips));
 
-        coforall loc in A.targetLocales() do on loc {
+        for loc in A.targetLocales() do on loc {
             // Create local copies of args
             const locFiles = filenames;
             const locFiledoms = filedomains;
@@ -3143,6 +3143,9 @@ module HDF5Msg {
                             isopen = true;
                         }
 
+                        writeln("---------------------------------");
+                        writeln("loc ", loc.id, " intersection: ", intersection);
+                        writeln("---------------------------------");
 
                         if nd == 1 {
                             // do A[intersection] = file[intersection - offset]
@@ -3175,19 +3178,17 @@ module HDF5Msg {
                             C_HDF5.H5Sclose(memspace);
                             C_HDF5.H5Sclose(dataspace);
                         } else {
-                            var strides = for 0..<nd do 1:C_HDF5.hsize_t,
-                                counts = strides, // only 1 block for the whole intersection
-                                blockSizes = [i in 0..<nd] intersection.dim(i).size:C_HDF5.hsize_t;
+                            var counts = [i in 0..<nd] intersection.dim(i).size:C_HDF5.hsize_t;
 
                             var dataspace = C_HDF5.H5Dget_space(dataset);
                             var dsetOffset = [i in 0..<nd] (intersection.dim(i).low - filedom.dim(i).low):C_HDF5.hsize_t;
                             C_HDF5.H5Sselect_hyperslab(dataspace, C_HDF5.H5S_SELECT_SET, c_ptrTo(dsetOffset),
-                                                            c_ptrTo(strides), c_ptrTo(counts), c_ptrTo(blockSizes));
+                                                       nil, c_ptrTo(counts), nil);
 
-                            var memspace = C_HDF5.H5Screate_simple(nd, c_ptrTo(blockSizes), nil);
+                            var memspace = C_HDF5.H5Screate_simple(nd, c_ptrTo(counts), nil);
                             var memOffset = for 0..<nd do 0:C_HDF5.hsize_t;
                             C_HDF5.H5Sselect_hyperslab(memspace, C_HDF5.H5S_SELECT_SET, c_ptrTo(memOffset),
-                                                            c_ptrTo(strides), c_ptrTo(counts), c_ptrTo(blockSizes));
+                                                       nil, c_ptrTo(counts), nil);
 
                             local {
                                 C_HDF5.H5Dread(dataset, getHDF5Type(A.eltType), memspace,
@@ -4044,6 +4045,8 @@ module HDF5Msg {
         var isSigned: bool;
         try {
             objType = getObjType(file_id, dsetName);
+            writeln("------- got object type: ", objType);
+
             if objType == ObjType.STRINGS || objType == ObjType.SEGARRAY {
                 if ( !calcStringOffsets ) {
                     var offsetDset = dsetName + "/" + SEGMENTED_OFFSET_NAME;
@@ -4173,6 +4176,8 @@ module HDF5Msg {
                 moduleName=getModuleName(),
                 errorClass='Error');
         }
+        writeln("----------- dataclass: ", dataclass:int);
+
         C_HDF5.H5Fclose(file_id);
         return (objType, dataclass, bytesize, isSigned);
     }
@@ -4255,11 +4260,30 @@ module HDF5Msg {
         return ("Filename_Codes", ObjType.PDARRAY, rname);
     }
 
+    @arkouda.registerND
+    proc readSingleHdfArray(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab, param nd: int): MsgTuple throws {
+        const file = msgArgs.get("filename").val,
+              dset = msgArgs.get("dset").val;
+
+        const (objType, dataclass, bytesize, isSigned) = get_info(file, dset, false);
+        var fi = [file, ],
+            vf = [true,];
+
+        writeln("---------------------------------");
+        writeln("got info: ", bytesize);
+        writeln("---------------------------------");
+
+        const ret = pdarray_readhdfMsg(fi, dset, dataclass, bytesize, isSigned, vf, st, nd);
+
+        const repMsg = "created " + st.attrib(ret[2]);
+        h5Logger.info(getModuleName(),getRoutineName(),getLineNumber(),repMsg);
+        return new MsgTuple(repMsg, MsgType.NORMAL);
+    }
+
     /*
         Read HDF5 files into an Arkouda Object
     */
-    @arkouda.registerND
-    proc readAllHdfMsg(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab, param nd: int): MsgTuple throws {
+    proc readAllHdfMsg(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab): MsgTuple throws {
         var tagData: bool = msgArgs.get("tag_data").getBoolValue();
         var strictTypes: bool = msgArgs.get("strict_types").getBoolValue();
 
@@ -4427,7 +4451,7 @@ module HDF5Msg {
                     rtnData.pushBack(arrayView_readhdfMsg(filenames, dsetName, dataclass, bytesize, isSigned, validFiles, st));
                 }
                 when ObjType.PDARRAY, ObjType.IPV4, ObjType.DATETIME, ObjType.TIMEDELTA {
-                    rtnData.pushBack(pdarray_readhdfMsg(filenames, dsetName, dataclass, bytesize, isSigned, validFiles, st, nd));
+                    rtnData.pushBack(pdarray_readhdfMsg(filenames, dsetName, dataclass, bytesize, isSigned, validFiles, st, 1));
                 }
                 when ObjType.STRINGS {
                     rtnData.pushBack(strings_readhdfMsg(filenames, dsetName, dataclass, bytesize, isSigned, calcStringOffsets, validFiles, st));

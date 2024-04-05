@@ -27,6 +27,7 @@ from ._dtypes import (
     _result_type,
     _dtype_categories,
 )
+from ._creation_functions import asarray
 
 from typing import TYPE_CHECKING, Optional, Tuple, Union, Any, Dict, Callable
 import types
@@ -392,9 +393,13 @@ class Array:
                         k.append(kt._array[0])
                     else :
                         k.append(kt._array)
+                elif isinstance(kt, np.ndarray):
+                    k.append(asarray(kt)._array)
                 else:
                     k.append(kt)
             k = tuple(k)
+        elif isinstance(key, np.npdarray):
+            k = asarray(key)._array
         else:  # int, slice
             k = key
 
@@ -494,6 +499,8 @@ class Array:
     def __mul__(self: Array, other: Union[int, float, Array], /) -> Array:
         if isinstance(other, (int, float)):
             return Array._new(self._array * other)
+        elif isinstance(other, np.ndarray):
+            return Array._new(self._array * asarray(other)._array)
         else:
             return Array._new(self._array * other._array)
 

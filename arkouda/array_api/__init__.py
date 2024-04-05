@@ -135,6 +135,8 @@ from ._statistical_functions import max, mean, min, prod, std, sum, var
 
 from ._utility_functions import all, any
 
+from ._io import read_hdf5, lshdf
+
 __array_api_version__ = "2022.12"
 
 __all__ = ["__array_api_version__"]
@@ -271,5 +273,7 @@ __all__ += ["argsort", "sort"]
 __all__ += ["max", "mean", "min", "prod", "std", "sum", "var"]
 
 __all__ += ["all", "any"]
+
+__all__ += ["read_hdf5", "lshdf"]
 
 warnings.warn("The arkouda.array_api submodule is still experimental.")
