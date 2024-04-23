@@ -73,6 +73,8 @@ module ManipulationMsg {
       var eIn = toSymEntry(gEnt, t, ndIn),
           eOut = st.addEntry(rname, (...shapeOut), t);
 
+      writeln("broadcast: ", eIn.tupShape, " -> ", shapeOut);
+
       if ndIn == ndOut && eIn.tupShape == shapeOut {
         // no broadcast necessary, copy the array
         eOut.a = eIn.a;
@@ -123,6 +125,10 @@ module ManipulationMsg {
             agg.copy(eOut.a[idx], eIn.a[imap(if ndOut==1 then (idx,) else idx, bcDims)]);
         }
       }
+
+      // writeln("---------------------");
+      // writeln("eOut: ", eOut.a);
+      // writeln("---------------------");
 
       const repMsg = "created " + st.attrib(rname);
       mLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);
@@ -517,6 +523,8 @@ module ManipulationMsg {
       const eIn = toSymEntry(gEnt, t, nd),
             (valid, perm) = validateAxes(axes);
 
+      writeln("perm: ", perm);
+
       if !valid {
         const errMsg = "Unable to permute array with shape %? using axes %?".doFormat(eIn.tupShape, axes);
         mLogger.error(getModuleName(),pn,getLineNumber(),errMsg);
@@ -528,6 +536,10 @@ module ManipulationMsg {
         // copy the data from the input array to the output array while permuting the axes
         forall idx in eOut.a.domain with (var agg = newSrcAggregator(t)) do
           agg.copy(eOut.a[idx], eIn.a[permuteTuple(if nd == 1 then (idx,) else idx, perm)]);
+
+        // writeln("---------------------");
+        // writeln("eOut: ", eOut.a);
+        // writeln("---------------------");
 
         const repMsg = "created " + st.attrib(rname);
         mLogger.info(getModuleName(),pn,getLineNumber(),repMsg);

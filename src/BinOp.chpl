@@ -333,7 +333,13 @@ module BinOp
             e.a = l.a - r.a;
           }
           when "*" {
-            e.a = l.a * r.a;
+            // e.a = l.a * r.a;
+            for i in e.a.domain {
+              e.a[i] = l.a[i] * r.a[i];
+            }
+            // writeln("-------------------");
+            // writeln(e.a);
+            // writeln("-------------------");
           }
           when "/" { // truediv
             e.a = l.a / r.a;
