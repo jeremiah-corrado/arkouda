@@ -286,8 +286,6 @@ module IndexingMsg
               array = msgArgs.getValueOf("array"),
               rname = st.nextName();
 
-        writeln("starts: ", starts, " stops: ", stops);
-
         var sliceRanges: nd * stridableRange,
             outDomRanges: nd * stridableRange;
         for param dim in 0..<nd {
@@ -296,8 +294,6 @@ module IndexingMsg
         }
         const sliceDom = {(...sliceRanges)},
               outDom = {(...outDomRanges)};
-
-        writeln("sliceDom: ", sliceDom, " outDom: ", outDom);
 
         var gEnt: borrowed GenSymEntry = getGenericTypedArrayEntry(array, st);
         imLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),
@@ -311,10 +307,6 @@ module IndexingMsg
             ref aa = a.a;
             forall (elt,j) in zip(aa, sliceDom) with (var agg = newSrcAggregator(t)) do
               agg.copy(elt,ea[j]);
-
-            // writeln("---------------------");
-            // writeln("a: ", a.a);
-            // writeln("---------------------");
 
             a.max_bits = e.max_bits;
             var repMsg = "created " + st.attrib(rname);
@@ -346,13 +338,11 @@ module IndexingMsg
         const stride = msgArgs.get("strides").getTuple(1);
         var slice: stridableRange = convertSlice(start[0], stop[0], stride[0]);
 
-        writeln("starts: ", start, " stops: ", stop, " slice: ", slice);
-
         // get next symbol name
         var rname = st.nextName();
         const name = msgArgs.getValueOf("array");
         var gEnt: borrowed GenSymEntry = getGenericTypedArrayEntry(name, st);
-        
+
         imLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),
             "cmd: %s pdarray to slice: %s start: %i stop: %i stride: %i slice: %? new name: %s".doFormat(
                        cmd, st.attrib(name), start[0], stop[0], stride[0], slice, rname));
@@ -366,16 +356,12 @@ module IndexingMsg
               agg.copy(elt,ea[j]);
             }
             a.max_bits = e.max_bits;
-            
-            // writeln("---------------------");
-            // writeln("a: ", a.a);
-            // writeln("---------------------");
 
             var repMsg = "created " + st.attrib(rname);
             imLogger.debug(getModuleName(),getRoutineName(),getLineNumber(),repMsg);
             return new MsgTuple(repMsg, MsgType.NORMAL);
         }
-        
+
         select(gEnt.dtype) {
             when (DType.Int64) {
                 return sliceHelper(int);

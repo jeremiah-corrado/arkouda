@@ -337,13 +337,10 @@ module BinOp
             for i in e.a.domain {
               e.a[i] = l.a[i] * r.a[i];
             }
-            // writeln("-------------------");
-            // writeln(e.a);
-            // writeln("-------------------");
           }
           when "/" { // truediv
             e.a = l.a / r.a;
-          } 
+          }
           when "//" { // floordiv
             ref ea = e.a;
             ref la = l.a;

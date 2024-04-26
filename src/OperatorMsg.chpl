@@ -72,8 +72,6 @@ module OperatorMsg
         realOps.add("/");
         realOps.add("//");
 
-        writeln("binopvv: ", op);
-
         select (left.dtype, right.dtype) {
           when (DType.Int64, DType.Int64) {
             var l = toSymEntry(left,int, nd);
