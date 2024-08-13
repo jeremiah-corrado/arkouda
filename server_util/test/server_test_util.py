@@ -242,6 +242,15 @@ def stop_arkouda_server():
 ####################
 
 
+def clear_symbol_table():
+    """
+    Clear the server's symbol table
+
+    :return: None
+    """
+    run_client(os.path.join(util_dir, "clear_symbols.py"), timeout=60)
+
+
 def get_client_timeout():
     """
     Get the timeout for clients. $ARKOUDA_CLIENT_TIMEOUT if set, otherwise None

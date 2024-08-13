@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 from server_util.test.server_test_util import get_arkouda_numlocales, start_arkouda_server,\
-    run_client, stop_arkouda_server
+    run_client, stop_arkouda_server, clear_symbol_table
 benchmark_dir = os.path.dirname(__file__)
 util_dir = os.path.join(benchmark_dir, "..", "server_util", "test")
 sys.path.insert(0, os.path.abspath(util_dir))
@@ -189,6 +189,7 @@ def main():
     for benchmark in args.benchmarks:
         for trial in range(args.numtrials):
             benchmark_py = os.path.join(benchmark_dir, "{}.py".format(benchmark))
+            clear_symbol_table()
             out = run_client(benchmark_py, client_args)
             if args.save_data or args.gen_graphs:
                 add_to_dat(benchmark, out, config_dat_dir, args.graph_infra)
