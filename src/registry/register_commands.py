@@ -375,16 +375,26 @@ def stamp_generic_command(
     )
 
     stamp_formal_args = ", ".join([f"{k}={v}" for k, v in formals.items()])
+    formal_values = ", ".join([str(v) for v in formals.values()])
 
-    # use qualified naming if generic_proc belongs in a use defined module to avoid name conflicts
-    call = f"{module_name}.{generic_proc_name}" if is_user_proc else generic_proc_name
+    def user_proc_call():
+        if is_user_proc:
+            # qualified_name = f"{module_name}.{generic_proc_name}"
+            return (
+                f"  use {module_name};\n"
+                + f"  if canResolve({generic_proc_name}, cmd, {ARGS_FORMAL_NAME}, {SYMTAB_FORMAL_NAME}, {formal_values})\n"
+                + f"    then return {generic_proc_name}(cmd, {ARGS_FORMAL_NAME}, {SYMTAB_FORMAL_NAME}, {stamp_formal_args});\n"
+                + f"    else return {RESPONSE_TYPE_NAME}.error(\"could not resolve command '{generic_proc_name}' with <{formal_values}>\");\n"
+            )
+        else:
+            return f"  return {generic_proc_name}(cmd, {ARGS_FORMAL_NAME}, {SYMTAB_FORMAL_NAME}, {stamp_formal_args});\n"
 
-    proc = (
-        f"proc {stamp_name}(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab): {RESPONSE_TYPE_NAME} throws do\n"
-        + f"  return {call}(cmd, msgArgs, st, {stamp_formal_args});\n"
+    return (
+        f"proc {stamp_name}(cmd: string, {ARGS_FORMAL_NAME}: borrowed {ARGS_FORMAL_TYPE}, {SYMTAB_FORMAL_NAME}: borrowed {SYMTAB_FORMAL_TYPE}): {RESPONSE_TYPE_NAME} throws {'{'}\n"
+        + user_proc_call()
+        + "}\n"
         + f"registerFunction('{command_name}', {stamp_name}, '{module_name}', {line_num});"
     )
-    return proc
 
 
 def permutations(to_permute):
@@ -1043,6 +1053,7 @@ def register_commands(config, source_files):
     stamps = [
         "module Commands {",
         "use CommandMap, Message, MultiTypeSymbolTable, MultiTypeSymEntry;",
+        "use Reflection;",
         "use BigInteger;",
         watermarkConfig(config),
     ]

@@ -439,12 +439,6 @@ module ArgSortMsg
         return st.insert(new shared SymEntry(iv));
     }
 
-    proc argsort(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab, type array_dtype, param array_nd: int): MsgTuple throws 
-      where (array_dtype == BigInteger.bigint) || (array_dtype == uint(8)) 
-    {
-        return MsgTuple.error("argsort does not support the %s dtype".format(array_dtype:string));
-    }
-
     proc argsortStrings(cmd: string, msgArgs: borrowed MessageArgs, st: borrowed SymTab): MsgTuple throws {
         const name = msgArgs["name"].toScalar(string),
               strings = getSegString(name, st),
